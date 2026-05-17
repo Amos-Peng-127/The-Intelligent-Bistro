@@ -5,9 +5,10 @@ import { currency } from "@/lib/format";
 type CartSummaryBarProps = {
   count: number;
   subtotal: number;
+  onViewCart: () => void;
 };
 
-export function CartSummaryBar({ count, subtotal }: CartSummaryBarProps) {
+export function CartSummaryBar({ count, subtotal, onViewCart }: CartSummaryBarProps) {
   if (count === 0) {
     return null;
   }
@@ -20,7 +21,7 @@ export function CartSummaryBar({ count, subtotal }: CartSummaryBarProps) {
         </Text>
         <Text style={styles.cartBarSubtitle}>Subtotal {currency.format(subtotal)}</Text>
       </View>
-      <Pressable style={styles.cartBarAction}>
+      <Pressable accessibilityLabel="View cart" onPress={onViewCart} style={styles.cartBarAction}>
         <Text style={styles.cartBarActionText}>View cart</Text>
       </Pressable>
     </View>

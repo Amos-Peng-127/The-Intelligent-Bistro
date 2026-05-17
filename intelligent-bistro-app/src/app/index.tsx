@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { router } from "expo-router";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -114,7 +115,7 @@ export default function Index() {
         </View>
       </ScrollView>
 
-      <CartSummaryBar count={count} subtotal={subtotal} />
+      <CartSummaryBar count={count} subtotal={subtotal} onViewCart={() => router.push("/cart")} />
 
       <ItemDetailModal
         item={selectedItem}
