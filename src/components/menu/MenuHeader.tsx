@@ -2,16 +2,17 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 type MenuHeaderProps = {
   cartCount: number;
+  onOpenCart: () => void;
 };
 
-export function MenuHeader({ cartCount }: MenuHeaderProps) {
+export function MenuHeader({ cartCount, onOpenCart }: MenuHeaderProps) {
   return (
     <View style={styles.header}>
       <View>
         <Text style={styles.eyebrow}>Open now - 20-30 min</Text>
         <Text style={styles.title}>Intelligent Bistro</Text>
       </View>
-      <Pressable accessibilityLabel="Open cart" style={styles.cartButton}>
+      <Pressable accessibilityLabel="Open cart" onPress={onOpenCart} style={styles.cartButton}>
         <Text style={styles.cartIcon}>Bag</Text>
         {cartCount > 0 ? (
           <View style={styles.cartBadge}>

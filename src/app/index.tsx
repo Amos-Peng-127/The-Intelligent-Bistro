@@ -89,9 +89,9 @@ export default function Index() {
         contentContainerStyle={[styles.content, count > 0 && styles.contentWithCart]}
         showsVerticalScrollIndicator={false}
       >
-        <MenuHeader cartCount={count} />
+        <MenuHeader cartCount={count} onOpenCart={() => router.push("/cart")} />
         <MenuSearch query={query} onChangeQuery={setQuery} />
-        <AiOrderCard />
+        <AiOrderCard onPress={() => router.push("/assistant")} />
         <CategoryRail
           categories={categories}
           selectedCategory={selectedCategory}

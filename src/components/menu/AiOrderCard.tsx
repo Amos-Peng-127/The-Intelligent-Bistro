@@ -1,8 +1,12 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-export function AiOrderCard() {
+type AiOrderCardProps = {
+  onPress: () => void;
+};
+
+export function AiOrderCard({ onPress }: AiOrderCardProps) {
   return (
-    <Pressable style={styles.aiCard}>
+    <Pressable onPress={onPress} style={styles.aiCard}>
       <View style={styles.aiMark}>
         <Text style={styles.aiMarkText}>AI</Text>
       </View>
