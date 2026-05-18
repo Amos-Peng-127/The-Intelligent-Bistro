@@ -28,6 +28,10 @@ yarn-debug.*
 yarn-error.*
 *.log
 
+# local tooling
+.claude/
+tmp-chrome-profile/
+
 # macOS
 .DS_Store
 *.pem
