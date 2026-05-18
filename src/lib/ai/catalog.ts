@@ -20,7 +20,8 @@ export const buildMenuCatalog = () =>
   menuItems
     .map((item) => {
       const spiceLevels = item.spiceLevels?.join("/") ?? "None";
-      const addOns = item.addOns?.map((addOn) => addOn.name).join(", ") ?? "None";
+      const addOns =
+        item.addOns?.map((addOn) => `${addOn.id}:${addOn.name}:${addOn.price}`).join(", ") ?? "None";
       const tags = item.tags.join(", ");
 
       return [
@@ -43,7 +44,7 @@ export const buildCartCatalog = (cartItems: BistroCartItem[]) => {
 
   return cartItems
     .map((item) => {
-      const addOns = item.addOns.map((addOn) => addOn.name).join(", ") || "None";
+      const addOns = item.addOns.map((addOn) => `${addOn.id}:${addOn.name}`).join(", ") || "None";
       return [
         `cartId: ${item.cartId}`,
         `itemId: ${item.itemId}`,

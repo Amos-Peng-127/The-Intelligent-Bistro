@@ -1,4 +1,4 @@
-import { submitOllamaOrderPrompt } from "../../../src/lib/ai/providers/ollama";
+import { submitOllamaOrderPrompt, warmOllamaModel } from "../../../src/lib/ai/providers/ollama";
 import type { BistroAiRequest } from "../../../src/lib/ai/types";
 import { validateAiResponse } from "../../../src/lib/ai/validate-response";
 
@@ -8,6 +8,16 @@ export async function interpretOrderPrompt(request: BistroAiRequest) {
   switch (serverAiConfig.provider) {
     case "ollama":
       return validateAiResponse(request, await submitOllamaOrderPrompt(request, serverAiConfig));
+    default:
+      throw new Error(`Unsupported AI provider: ${serverAiConfig.provider}`);
+  }
+}
+
+export async function warmOrderModel() {
+  switch (serverAiConfig.provider) {
+    case "ollama":
+      await warmOllamaModel(serverAiConfig);
+      return;
     default:
       throw new Error(`Unsupported AI provider: ${serverAiConfig.provider}`);
   }

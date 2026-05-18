@@ -5,13 +5,24 @@ import express from "express";
 
 import { categories, menuCatalogItems } from "../src/data/menu-catalog";
 
-import { interpretOrderPrompt } from "./lib/ai/interpret-order";
+import { interpretOrderPrompt, warmOrderModel } from "./lib/ai/interpret-order";
 import { interpretRequestSchema } from "./lib/api-schema";
 import { getServerRuntimeLabel, serverAiConfig } from "./lib/config";
 
 const app = express();
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.PORT ?? "3001", 10);
+let warmupPromise: Promise<void> | null = null;
+
+const triggerWarmup = async () => {
+  if (!warmupPromise) {
+    warmupPromise = warmOrderModel().finally(() => {
+      warmupPromise = null;
+    });
+  }
+
+  return warmupPromise;
+};
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -53,6 +64,20 @@ app.post("/ai/interpret", async (request, response) => {
   }
 });
 
+app.post("/ai/warm", async (_request, response) => {
+  try {
+    await triggerWarmup();
+    response.json({ status: "ok" });
+  } catch (error) {
+    response.status(502).json({
+      error: error instanceof Error ? error.message : "The Bistro AI warm-up failed.",
+    });
+  }
+});
+
 app.listen(port, host, () => {
   console.log(`[bistro-api] listening on http://${host}:${port}`);
+  void triggerWarmup().catch((error) => {
+    console.warn("[bistro-api] warm-up failed:", error instanceof Error ? error.message : error);
+  });
 });

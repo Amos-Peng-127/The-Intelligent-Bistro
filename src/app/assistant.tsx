@@ -22,7 +22,7 @@ import { AiActionPreview } from "@/components/assistant/AiActionPreview";
 import { AssistantBubble } from "@/components/assistant/AssistantBubble";
 import { PromptChips, type AssistantPromptCard } from "@/components/assistant/PromptChips";
 import { applyAiActions } from "@/lib/ai/apply-actions";
-import { submitOrderPrompt } from "@/lib/ai";
+import { submitOrderPrompt, warmBistroAi } from "@/lib/ai";
 import type {
   BistroAiAction,
   BistroAiClarificationOption,
@@ -171,6 +171,10 @@ export default function AssistantScreen() {
 
     return () => clearTimeout(timer);
   }, [messages, isSubmitting]);
+
+  useEffect(() => {
+    void warmBistroAi().catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
