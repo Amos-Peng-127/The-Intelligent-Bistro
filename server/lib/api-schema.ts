@@ -12,16 +12,20 @@ const actionSchema = z.union([
     itemId: z.string().min(1),
     quantity: z.number().int().positive(),
     spiceLevel: z.string().min(1).optional(),
+    addOnIds: z.array(z.string().min(1)).max(10).optional(),
   }),
   z.object({
     type: z.literal("set_quantity"),
     itemId: z.string().min(1),
     quantity: z.number().int().positive(),
     spiceLevel: z.string().min(1).optional(),
+    addOnIds: z.array(z.string().min(1)).max(10).optional(),
   }),
   z.object({
     type: z.literal("remove_item"),
     itemId: z.string().min(1),
+    spiceLevel: z.string().min(1).optional(),
+    addOnIds: z.array(z.string().min(1)).max(10).optional(),
   }),
   z.object({
     type: z.literal("clear_cart"),
@@ -36,6 +40,7 @@ const selectionPlanSchema = z
     tags: z.array(z.string().min(1)).optional(),
     category: z.enum(["rolls", "ramen", "appetizers", "salads"]).optional(),
     spiceLevel: z.string().min(1).optional(),
+    addOnIds: z.array(z.string().min(1)).max(10).optional(),
     sortBy: z.enum(["relevance", "price"]).optional(),
     sortDirection: z.enum(["asc", "desc"]).optional(),
     take: z.number().int().positive().max(10).optional(),
@@ -44,6 +49,31 @@ const selectionPlanSchema = z
   .nullable()
   .optional();
 
+const missingSlotSchema = z.enum(["item", "quantity", "spice_level"]);
+
+const commandSchema = z.object({
+  state: z.enum(["ready", "needs_clarification", "inform"]),
+  intent: z.enum([
+    "add_items",
+    "update_items",
+    "remove_items",
+    "clear_cart",
+    "recommend_items",
+    "explain_items",
+    "clarify",
+    "answer_question",
+  ]),
+  executable: z.boolean(),
+  requiresConfirmation: z.boolean(),
+  actions: z.array(actionSchema),
+  selectionPlan: selectionPlanSchema,
+});
+
+const clarificationOptionSchema = z.object({
+  label: z.string().min(1),
+  prompt: z.string().min(1),
+});
+
 const conversationTurnSchema = z.object({
   role: z.enum(["assistant", "user"]),
   text: z.string().min(1),
@@ -51,6 +81,9 @@ const conversationTurnSchema = z.object({
   referencedItemIds: z.array(z.string().min(1)).optional(),
   actions: z.array(actionSchema).optional(),
   selectionPlan: selectionPlanSchema,
+  command: commandSchema.nullable().optional(),
+  missingSlots: z.array(missingSlotSchema).optional(),
+  clarificationOptions: z.array(clarificationOptionSchema).optional(),
 });
 
 const cartItemSchema = z.object({

@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { router } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -5,19 +6,75 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { CartItemRow } from "@/components/cart/CartItemRow";
 import { EmptyCart } from "@/components/cart/EmptyCart";
 import { OrderSummary } from "@/components/cart/OrderSummary";
+import { ItemDetailModal } from "@/components/menu/ItemDetailModal";
+import { type AddOn, menuItems } from "@/data/menu";
 import { currency } from "@/lib/format";
 import { getCartTotals, useCartStore } from "@/store/cart-store";
 
 const TAX_RATE = 0.08875;
+const menuById = new Map(menuItems.map((item) => [item.id, item]));
 
 export default function CartScreen() {
+  const [editingCartId, setEditingCartId] = useState<string | null>(null);
+  const [editQuantity, setEditQuantity] = useState(1);
+  const [editSpice, setEditSpice] = useState<string | undefined>();
+  const [editAddOns, setEditAddOns] = useState<AddOn[]>([]);
   const items = useCartStore((state) => state.items);
+  const updateItemConfiguration = useCartStore((state) => state.updateItemConfiguration);
   const updateQuantity = useCartStore((state) => state.updateQuantity);
   const removeItem = useCartStore((state) => state.removeItem);
   const clearCart = useCartStore((state) => state.clearCart);
   const { count, subtotal } = getCartTotals(items);
   const tax = subtotal * TAX_RATE;
   const total = subtotal + tax;
+  const editingCartItem = useMemo(
+    () => items.find((item) => item.cartId === editingCartId) ?? null,
+    [editingCartId, items],
+  );
+  const editingMenuItem = editingCartItem ? menuById.get(editingCartItem.itemId) ?? null : null;
+  const editTotal = editingMenuItem
+    ? (editingMenuItem.price + editAddOns.reduce((sum, addOn) => sum + addOn.price, 0)) * editQuantity
+    : 0;
+
+  const closeEditor = () => {
+    setEditingCartId(null);
+    setEditQuantity(1);
+    setEditSpice(undefined);
+    setEditAddOns([]);
+  };
+
+  const openEditor = (cartId: string) => {
+    const cartItem = items.find((item) => item.cartId === cartId);
+    if (!cartItem || !menuById.has(cartItem.itemId)) {
+      return;
+    }
+
+    setEditingCartId(cartId);
+    setEditQuantity(cartItem.quantity);
+    setEditSpice(cartItem.spiceLevel);
+    setEditAddOns(cartItem.addOns);
+  };
+
+  const toggleEditAddOn = (addOn: AddOn) => {
+    setEditAddOns((current) =>
+      current.some((selected) => selected.id === addOn.id)
+        ? current.filter((selected) => selected.id !== addOn.id)
+        : [...current, addOn],
+    );
+  };
+
+  const saveEditedItem = () => {
+    if (!editingCartId || !editingMenuItem) {
+      return;
+    }
+
+    updateItemConfiguration(editingCartId, editingMenuItem, {
+      quantity: editQuantity,
+      spiceLevel: editSpice,
+      addOns: editAddOns,
+    });
+    closeEditor();
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -84,7 +141,7 @@ export default function CartScreen() {
               <View style={styles.assistantCopy}>
                 <Text style={styles.assistantTitle}>Edit with Bistro AI</Text>
                 <Text style={styles.assistantText}>
-                  Say things like "remove one edamame" or "clear the cart after adding a fresh roll."
+                  Say things like remove one edamame or clear the cart after adding a fresh roll.
                 </Text>
               </View>
               <Text style={styles.assistantAction}>Open</Text>
@@ -96,6 +153,7 @@ export default function CartScreen() {
                   key={item.cartId}
                   item={item}
                   onDecrease={updateQuantity}
+                  onEdit={openEditor}
                   onIncrease={updateQuantity}
                   onRemove={removeItem}
                 />
@@ -106,6 +164,20 @@ export default function CartScreen() {
           </>
         )}
       </ScrollView>
+
+      <ItemDetailModal
+        item={editingMenuItem}
+        quantity={editQuantity}
+        spiceLevel={editSpice}
+        selectedAddOns={editAddOns}
+        total={editTotal}
+        submitLabel={`Save changes - ${currency.format(editTotal)}`}
+        onClose={closeEditor}
+        onAddToCart={saveEditedItem}
+        onChangeQuantity={setEditQuantity}
+        onChangeSpiceLevel={setEditSpice}
+        onToggleAddOn={toggleEditAddOn}
+      />
     </SafeAreaView>
   );
 }

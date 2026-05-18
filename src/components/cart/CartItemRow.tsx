@@ -7,10 +7,11 @@ type CartItemRowProps = {
   item: CartItem;
   onDecrease: (cartId: string, quantity: number) => void;
   onIncrease: (cartId: string, quantity: number) => void;
+  onEdit: (cartId: string) => void;
   onRemove: (cartId: string) => void;
 };
 
-export function CartItemRow({ item, onDecrease, onIncrease, onRemove }: CartItemRowProps) {
+export function CartItemRow({ item, onDecrease, onIncrease, onEdit, onRemove }: CartItemRowProps) {
   const addOnsTotal = item.addOns.reduce((sum, addOn) => sum + addOn.price, 0);
   const lineTotal = (item.price + addOnsTotal) * item.quantity;
   const optionSummary = [
@@ -28,7 +29,7 @@ export function CartItemRow({ item, onDecrease, onIncrease, onRemove }: CartItem
           <Text style={styles.total}>{currency.format(lineTotal)}</Text>
         </View>
         {optionSummary.length > 0 ? (
-          <Text style={styles.options}>{optionSummary.join(" · ")}</Text>
+          <Text style={styles.options}>{optionSummary.join(" / ")}</Text>
         ) : (
           <Text style={styles.options}>Standard preparation</Text>
         )}
@@ -51,13 +52,22 @@ export function CartItemRow({ item, onDecrease, onIncrease, onRemove }: CartItem
               <Text style={styles.stepperText}>+</Text>
             </Pressable>
           </View>
-          <Pressable
-            accessibilityLabel={`Remove ${item.name}`}
-            onPress={() => onRemove(item.cartId)}
-            style={styles.removeButton}
-          >
-            <Text style={styles.removeText}>Remove</Text>
-          </Pressable>
+          <View style={styles.actionRow}>
+            <Pressable
+              accessibilityLabel={`Edit ${item.name}`}
+              onPress={() => onEdit(item.cartId)}
+              style={styles.editButton}
+            >
+              <Text style={styles.editText}>Edit</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Remove ${item.name}`}
+              onPress={() => onRemove(item.cartId)}
+              style={styles.removeButton}
+            >
+              <Text style={styles.removeText}>Remove</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </View>
@@ -147,6 +157,20 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     minWidth: 32,
     textAlign: "center",
+  },
+  actionRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+  },
+  editButton: {
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+  },
+  editText: {
+    color: "#3F5C4A",
+    fontSize: 12,
+    fontWeight: "900",
   },
   removeButton: {
     paddingHorizontal: 4,

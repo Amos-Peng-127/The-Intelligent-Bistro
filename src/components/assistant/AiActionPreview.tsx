@@ -24,6 +24,10 @@ const slotLabelMap = {
     en: "quantity",
     zh: "\u6570\u91cf",
   },
+  spice_level: {
+    en: "spice level",
+    zh: "\u8fa3\u5ea6",
+  },
 } as const;
 
 export function AiActionPreview({

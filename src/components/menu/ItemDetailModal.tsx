@@ -10,6 +10,7 @@ type ItemDetailModalProps = {
   spiceLevel?: string;
   selectedAddOns: AddOn[];
   total: number;
+  submitLabel?: string;
   onClose: () => void;
   onAddToCart: () => void;
   onChangeQuantity: (quantity: number) => void;
@@ -23,6 +24,7 @@ export function ItemDetailModal({
   spiceLevel,
   selectedAddOns,
   total,
+  submitLabel,
   onClose,
   onAddToCart,
   onChangeQuantity,
@@ -136,7 +138,9 @@ export function ItemDetailModal({
 
           <View style={styles.modalFooter}>
             <Pressable style={styles.addToCartButton} onPress={onAddToCart}>
-              <Text style={styles.addToCartText}>Add to cart - {currency.format(total)}</Text>
+              <Text style={styles.addToCartText}>
+                {submitLabel ?? `Add to cart - ${currency.format(total)}`}
+              </Text>
             </Pressable>
           </View>
         </SafeAreaView>

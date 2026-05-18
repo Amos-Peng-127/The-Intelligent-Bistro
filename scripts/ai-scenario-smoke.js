@@ -21,20 +21,28 @@ const { menuItems } = jiti("../src/data/menu.ts");
 
 const menuById = new Map(menuItems.map((item) => [item.id, item]));
 
-const makeCartItem = (itemId, quantity = 1) => {
+const makeCartItem = (itemId, quantity = 1, options = {}) => {
   const item = menuById.get(itemId);
   if (!item) {
     throw new Error(`Unknown menu item: ${itemId}`);
   }
 
+  const addOnsById = new Map((item.addOns ?? []).map((addOn) => [addOn.id, addOn]));
+  const addOns = (options.addOnIds ?? []).flatMap((addOnId) => {
+    const addOn = addOnsById.get(addOnId);
+    return addOn ? [addOn] : [];
+  });
+  const spiceLevel = options.spiceLevel;
+  const addOnKey = addOns.map((addOn) => addOn.id).sort().join("-");
+
   return {
-    cartId: `${item.id}__standard__none`,
+    cartId: `${item.id}__${spiceLevel ?? "standard"}__${addOnKey || "none"}`,
     itemId: item.id,
     name: item.name,
     price: item.price,
     quantity,
-    spiceLevel: undefined,
-    addOns: [],
+    spiceLevel,
+    addOns,
     image: item.image,
   };
 };
@@ -71,7 +79,9 @@ const getActionTotal = (actions) =>
       return sum;
     }
 
-    return sum + item.price * (action.quantity ?? 1);
+    const addOnsById = new Map((item.addOns ?? []).map((addOn) => [addOn.id, addOn.price]));
+    const addOnTotal = (action.addOnIds ?? []).reduce((actionSum, addOnId) => actionSum + (addOnsById.get(addOnId) ?? 0), 0);
+    return sum + (item.price + addOnTotal) * (action.quantity ?? 1);
   }, 0);
 
 const getSuggestedTotal = (itemIds) =>
@@ -103,6 +113,24 @@ const evaluateExpectations = (response, expected) => {
       .map((action) => action.itemId);
     if (!compareArray(actual, expected.actionItemIds)) {
       failures.push(`actionItemIds expected [${expected.actionItemIds.join(", ")}] but got [${actual.join(", ")}]`);
+    }
+  }
+
+  if (expected.actionAddOnIds) {
+    const normalizeNestedArray = (values) => values.map((value) => JSON.stringify([...value].sort()));
+    const actual = response.actions.map((action) => ("addOnIds" in action ? action.addOnIds ?? [] : []));
+    if (!compareArray(normalizeNestedArray(actual), normalizeNestedArray(expected.actionAddOnIds))) {
+      failures.push(
+        `actionAddOnIds expected [${normalizeNestedArray(expected.actionAddOnIds).join(", ")}] but got [${normalizeNestedArray(actual).join(", ")}]`,
+      );
+    }
+  }
+
+  if (expected.actionSpiceLevels) {
+    const actual = response.actions.map((action) => ("spiceLevel" in action ? action.spiceLevel ?? null : null));
+    const expectedValues = expected.actionSpiceLevels.map((value) => value ?? null);
+    if (!compareArray(actual, expectedValues)) {
+      failures.push(`actionSpiceLevels expected [${expectedValues.join(", ")}] but got [${actual.join(", ")}]`);
     }
   }
 
@@ -235,6 +263,60 @@ const evaluateExpectations = (response, expected) => {
 };
 
 const scenarios = [
+  {
+    name: "Single configurable add asks for spice then preserves modifiers",
+    turns: [
+      {
+        prompt: "add 2 black garlic ramen with marinated egg",
+        modelContent: jsonContent({
+          intent: "add_items",
+          reply: "I found 2 x Black Garlic Ramen. Review the cart changes below.",
+          needsConfirmation: true,
+          actions: [{ type: "add_item", itemId: "black-garlic-ramen", quantity: 2, addOnIds: ["ajitama"] }],
+          suggestedItemIds: [],
+          referencedItemIds: ["black-garlic-ramen"],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "add_items",
+          actionTypes: ["add_item"],
+          actionItemIds: ["black-garlic-ramen"],
+          actionAddOnIds: [["ajitama"]],
+          needsConfirmation: false,
+          missingSlots: ["spice_level"],
+          clarificationOptionLabelsInclude: ["Mild", "Medium", "Spicy"],
+          commandState: "needs_clarification",
+          commandExecutable: false,
+          referencedMustInclude: ["black-garlic-ramen"],
+          replyIncludes: ["spice level", "Marinated egg"],
+        },
+      },
+      {
+        prompt: "Spicy",
+        modelContent: jsonContent({
+          intent: "answer_question",
+          reply: "Black Garlic Ramen is one of the richer bowls on the menu.",
+          needsConfirmation: false,
+          actions: [],
+          suggestedItemIds: [],
+          referencedItemIds: ["black-garlic-ramen"],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "add_items",
+          actionTypes: ["add_item"],
+          actionItemIds: ["black-garlic-ramen"],
+          actionAddOnIds: [["ajitama"]],
+          actionSpiceLevels: ["Spicy"],
+          needsConfirmation: true,
+          missingSlots: [],
+          commandState: "ready",
+          commandExecutable: true,
+          replyIncludes: ["Black Garlic Ramen"],
+        },
+      },
+    ],
+  },
   {
     name: "Clarification follow-up keeps remove intent on empty cart",
     seedConversation: [
@@ -1091,6 +1173,146 @@ const scenarios = [
       },
     ],
   },
+  {
+    name: "Modifier parsing for add actions",
+    turns: [
+      {
+        prompt: "Add one spicy black garlic ramen with extra chashu and corn.",
+        modelContent: jsonContent({
+          intent: "add_items",
+          reply: "Sure.",
+          needsConfirmation: true,
+          actions: [],
+          suggestedItemIds: [],
+          referencedItemIds: [],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "add_items",
+          actionTypes: ["add_item"],
+          actionItemIds: ["black-garlic-ramen"],
+          actionAddOnIds: [["extra-chashu", "corn"]],
+          replyIncludes: ["Extra chashu", "Sweet corn"],
+        },
+      },
+    ],
+  },
+  {
+    name: "Variant-aware quantity updates keep add-ons",
+    initialCart: [
+      {
+        itemId: "black-garlic-ramen",
+        quantity: 2,
+        spiceLevel: "Spicy",
+        addOnIds: ["extra-chashu"],
+      },
+    ],
+    turns: [
+      {
+        prompt: "Change the spicy black garlic ramen with extra chashu to one.",
+        modelContent: jsonContent({
+          intent: "update_items",
+          reply: "Got it.",
+          needsConfirmation: true,
+          actions: [],
+          suggestedItemIds: [],
+          referencedItemIds: [],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "update_items",
+          actionTypes: ["set_quantity"],
+          actionItemIds: ["black-garlic-ramen"],
+          actionAddOnIds: [["extra-chashu"]],
+          replyIncludes: ["Extra chashu"],
+        },
+      },
+    ],
+  },
+  {
+    name: "Explicit quantity update does not pull in the previous dish",
+    initialCart: [
+      {
+        itemId: "black-garlic-ramen",
+        quantity: 2,
+        spiceLevel: "Medium",
+      },
+      {
+        itemId: "truffle-salmon-roll",
+        quantity: 1,
+        spiceLevel: "Mild",
+      },
+    ],
+    seedConversation: [
+      {
+        role: "assistant",
+        text: "I found 1 x Truffle Salmon Roll (Mild). Review the cart changes below.",
+        actions: [{ type: "add_item", itemId: "truffle-salmon-roll", quantity: 1, spiceLevel: "Mild" }],
+        referencedItemIds: ["truffle-salmon-roll"],
+        suggestedItemIds: [],
+        selectionPlan: null,
+        command: {
+          state: "ready",
+          intent: "add_items",
+          executable: true,
+          requiresConfirmation: true,
+        },
+        missingSlots: [],
+        clarificationOptions: [],
+      },
+    ],
+    turns: [
+      {
+        prompt: "Change black garlic ramen to 1.",
+        modelContent: jsonContent({
+          intent: "update_items",
+          reply: "Sure.",
+          needsConfirmation: true,
+          actions: [],
+          suggestedItemIds: [],
+          referencedItemIds: [],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "update_items",
+          actionTypes: ["set_quantity"],
+          actionItemIds: ["black-garlic-ramen"],
+          replyNotIncludes: ["Truffle Salmon Roll"],
+        },
+      },
+    ],
+  },
+  {
+    name: "Spice-only update swaps the cart variant",
+    initialCart: [
+      {
+        itemId: "black-garlic-ramen",
+        quantity: 2,
+        spiceLevel: "Medium",
+      },
+    ],
+    turns: [
+      {
+        prompt: "Change black garlic ramen to mild spicy level.",
+        modelContent: jsonContent({
+          intent: "update_items",
+          reply: "Okay.",
+          needsConfirmation: true,
+          actions: [],
+          suggestedItemIds: [],
+          referencedItemIds: [],
+          unavailableRequests: [],
+        }),
+        expect: {
+          intent: "update_items",
+          actionTypes: ["remove_item", "add_item"],
+          actionItemIds: ["black-garlic-ramen", "black-garlic-ramen"],
+          actionAddOnIds: [[], []],
+          replyIncludes: ["Mild"],
+        },
+      },
+    ],
+  },
 ];
 
 const run = async () => {
@@ -1098,7 +1320,12 @@ const run = async () => {
 
   for (const scenario of scenarios) {
     const conversation = (scenario.seedConversation ?? []).map((turn) => ({ ...turn }));
-    const cartItems = (scenario.initialCart ?? []).map((entry) => makeCartItem(entry.itemId, entry.quantity));
+    const cartItems = (scenario.initialCart ?? []).map((entry) =>
+      makeCartItem(entry.itemId, entry.quantity, {
+        addOnIds: entry.addOnIds,
+        spiceLevel: entry.spiceLevel,
+      }),
+    );
     let scenarioPassed = true;
 
     console.log(`\nScenario: ${scenario.name}`);
@@ -1133,7 +1360,15 @@ const run = async () => {
         `    Actions: ${asList(
           response.actions.map((action) =>
             "itemId" in action
-              ? `${action.type}:${action.itemId}${"quantity" in action ? `:${action.quantity}` : ""}`
+              ? [
+                  action.type,
+                  action.itemId,
+                  "quantity" in action ? action.quantity : null,
+                  "spiceLevel" in action ? action.spiceLevel ?? null : null,
+                  "addOnIds" in action && action.addOnIds?.length ? action.addOnIds.join("+") : null,
+                ]
+                  .filter((part) => part !== null && part !== "")
+                  .join(":")
               : action.type,
           ),
         )}`,

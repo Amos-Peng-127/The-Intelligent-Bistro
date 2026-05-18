@@ -1,7 +1,9 @@
 import { menuCatalogItems as menuItems } from "../../data/menu-catalog";
 
-import { resolveSetQuantityTarget } from "./cart-targeting";
+import { matchesActionCartVariant, resolveSetQuantityTarget } from "./cart-targeting";
 import {
+  detectPromptAddOnIds,
+  detectPromptSpiceLevel,
   findCartRemovalMatches,
   findItemMatches,
   hasChineseCharacters,
@@ -23,6 +25,135 @@ import type {
 
 const menuById = new Map(menuItems.map((item) => [item.id, item]));
 type MenuItem = (typeof menuItems)[number];
+
+const normalizeAddOnIds = (addOnIds?: string[]) =>
+  [...new Set((addOnIds ?? []).map((addOnId) => addOnId.trim()).filter(Boolean))].sort();
+
+const mergeActionAddOnIds = (primary?: string[], fallback?: string[]) => {
+  const merged = normalizeAddOnIds([...(fallback ?? []), ...(primary ?? [])]);
+  return merged.length > 0 ? merged : undefined;
+};
+
+const normalizeActionSpiceLevel = (item: MenuItem | undefined, spiceLevel?: string) => {
+  if (!item?.spiceLevels?.length || !spiceLevel) {
+    return undefined;
+  }
+
+  return item.spiceLevels.find((level) => level.toLowerCase() === spiceLevel.trim().toLowerCase());
+};
+
+const normalizeActionAddOnIds = (item: MenuItem | undefined, addOnIds?: string[]) => {
+  if (!Array.isArray(addOnIds)) {
+    return undefined;
+  }
+
+  if (!item?.addOns?.length) {
+    return [];
+  }
+
+  const allowedIds = new Set(item.addOns.map((addOn) => addOn.id));
+  return normalizeAddOnIds(addOnIds.filter((addOnId) => allowedIds.has(addOnId)));
+};
+
+const resolveActionAddOnNames = (item: MenuItem | undefined, addOnIds?: string[]) => {
+  if (!item?.addOns?.length || !Array.isArray(addOnIds)) {
+    return [];
+  }
+
+  const addOnsById = new Map(item.addOns.map((addOn) => [addOn.id, addOn.name]));
+  return normalizeAddOnIds(addOnIds).flatMap((addOnId) => {
+    const name = addOnsById.get(addOnId);
+    return name ? [name] : [];
+  });
+};
+
+const formatActionModifierLabel = (action: BistroAiAction) => {
+  if (action.type === "clear_cart") {
+    return "";
+  }
+
+  const item = menuById.get(action.itemId);
+  const parts: string[] = [];
+
+  if ("spiceLevel" in action && action.spiceLevel) {
+    parts.push(action.spiceLevel);
+  }
+
+  if ("addOnIds" in action) {
+    const addOnNames = resolveActionAddOnNames(item, action.addOnIds);
+    if (addOnNames.length > 0) {
+      parts.push(addOnNames.join(", "));
+    }
+  }
+
+  return parts.length > 0 ? ` (${parts.join(" | ")})` : "";
+};
+
+const formatActionModifierSummary = (action: BistroAiAction) => formatActionModifierLabel(action).slice(2, -1);
+
+const normalizeOptionalText = (value?: string) => value?.trim().toLowerCase() ?? "";
+
+const actionHasModifierChange = (
+  cartItem: BistroAiRequest["cartItems"][number],
+  action: Extract<BistroAiAction, { type: "add_item" | "set_quantity" }>,
+) => {
+  const spiceChanged =
+    action.spiceLevel !== undefined && normalizeOptionalText(cartItem.spiceLevel) !== normalizeOptionalText(action.spiceLevel);
+  const addOnsChanged =
+    Array.isArray(action.addOnIds) &&
+    normalizeAddOnIds(cartItem.addOns.map((addOn) => addOn.id)).join(",") !== normalizeAddOnIds(action.addOnIds).join(",");
+
+  return spiceChanged || addOnsChanged;
+};
+
+const resolveCartTargetItemIds = ({
+  cartItems,
+  cartResolutionItemIds,
+  contextualItemIds,
+  directMentionMatches,
+}: {
+  cartItems: BistroAiRequest["cartItems"];
+  cartResolutionItemIds: string[];
+  contextualItemIds: string[];
+  directMentionMatches: Array<{ itemId: string }>;
+}) => {
+  const explicitItemIds = unique([
+    ...directMentionMatches.map((match) => match.itemId),
+    ...cartResolutionItemIds,
+  ]).filter((itemId) => cartItems.some((item) => item.itemId === itemId));
+
+  if (explicitItemIds.length > 0) {
+    return explicitItemIds;
+  }
+
+  return unique(contextualItemIds.filter((itemId) => cartItems.some((item) => item.itemId === itemId)));
+};
+
+const getActionKey = (action: BistroAiAction) => {
+  if (action.type === "clear_cart") {
+    return action.type;
+  }
+
+  const spiceLevel = "spiceLevel" in action ? action.spiceLevel?.trim().toLowerCase() ?? "" : "";
+  const addOnIds = "addOnIds" in action ? normalizeAddOnIds(action.addOnIds).join(",") : "";
+  const quantity = "quantity" in action ? action.quantity : "";
+
+  return [action.type, action.itemId, quantity, spiceLevel, addOnIds].join(":");
+};
+
+const dedupeActions = (actions: BistroAiAction[]) => {
+  const seen = new Set<string>();
+
+  return actions.filter((action) => {
+    const key = getActionKey(action);
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+};
 
 const addIntentHints = [
   "add",
@@ -661,14 +792,23 @@ const resolveClarificationFollowUpIntent = (request: BistroAiRequest, prompt: st
   const waitingFor = latestAssistantTurn.missingSlots ?? [];
   const expectsItem = waitingFor.length === 0 || waitingFor.includes("item");
   const expectsQuantity = waitingFor.includes("quantity");
+  const expectsSpiceLevel = waitingFor.includes("spice_level");
   const resolvedContextItemIds = resolveContextualItemIds(request, prompt);
   const quantity = extractRequestedQuantity(prompt);
+  const modifierTargetItemId = latestAssistantTurn.actions?.find(isAddAction)?.itemId;
   const answeredWithItem =
     (expectsItem && resolvedContextItemIds.length > 0) ||
     matchesClarificationOption(prompt, latestAssistantTurn);
   const answeredWithQuantity = expectsQuantity && quantity !== null;
+  const answeredWithSpiceLevel =
+    expectsSpiceLevel &&
+    (matchesClarificationOption(prompt, latestAssistantTurn) ||
+      detectPromptSpiceLevel(prompt) !== undefined ||
+      (modifierTargetItemId ? (detectPromptAddOnIds(prompt, modifierTargetItemId)?.length ?? 0) > 0 : false));
 
-  return answeredWithItem || answeredWithQuantity ? latestAssistantTurn.command.intent : null;
+  return answeredWithItem || answeredWithQuantity || answeredWithSpiceLevel
+    ? latestAssistantTurn.command.intent
+    : null;
 };
 
 const getSelectionSourceIds = (request: BistroAiRequest, source: BistroAiSelectionPlan["source"]) => {
@@ -869,6 +1009,7 @@ const resolveActionsFromSelectionPlan = (
     case "add_items":
       return resolvedItemIds.map((itemId) => ({
         type: "add_item" as const,
+        addOnIds: plan?.addOnIds,
         itemId,
         quantity: Math.max(1, plan?.quantity ?? 1),
         spiceLevel: plan?.spiceLevel,
@@ -878,6 +1019,7 @@ const resolveActionsFromSelectionPlan = (
         .filter((itemId) => request.cartItems.some((item) => item.itemId === itemId))
         .map((itemId) => ({
           type: "set_quantity" as const,
+          addOnIds: plan?.addOnIds,
           itemId,
           quantity: Math.max(1, plan?.quantity ?? 1),
           spiceLevel: plan?.spiceLevel,
@@ -887,7 +1029,9 @@ const resolveActionsFromSelectionPlan = (
         .filter((itemId) => request.cartItems.some((item) => item.itemId === itemId))
         .map((itemId) => ({
           type: "remove_item" as const,
+          addOnIds: plan?.addOnIds,
           itemId,
+          spiceLevel: plan?.spiceLevel,
         }));
     default:
       return [];
@@ -1282,10 +1426,25 @@ const pickByPrice = (candidateIds: string[], direction: "asc" | "desc") => {
 const resolveContextualItemIds = (request: BistroAiRequest, prompt: string) => {
   const directMatches = unique(findItemMatches(prompt).map((match) => match.itemId));
   const latestReferencedIds = getLatestReferencedIds(request.conversation);
+  const latestAssistantTurn = getLatestAssistantTurn(request.conversation);
   const ordinalIndex = extractOrdinalIndex(prompt, latestReferencedIds.length);
+  const clarificationTargetItemId =
+    latestAssistantTurn?.command?.state === "needs_clarification" &&
+    latestAssistantTurn.missingSlots?.includes("spice_level") &&
+    latestReferencedIds.length === 1
+      ? latestReferencedIds[0]
+      : null;
+  const clarificationReplyLooksLikeModifiers =
+    clarificationTargetItemId !== null &&
+    (detectPromptSpiceLevel(prompt) !== undefined ||
+      (detectPromptAddOnIds(prompt, clarificationTargetItemId)?.length ?? 0) > 0);
 
   if (ordinalIndex !== null && latestReferencedIds[ordinalIndex]) {
     return [latestReferencedIds[ordinalIndex]];
+  }
+
+  if (clarificationReplyLooksLikeModifiers && clarificationTargetItemId) {
+    return [clarificationTargetItemId];
   }
 
   if (directMatches.length > 0) {
@@ -1294,6 +1453,10 @@ const resolveContextualItemIds = (request: BistroAiRequest, prompt: string) => {
 
   if (latestReferencedIds.length === 0) {
     return [];
+  }
+
+  if (latestReferencedIds.length === 1 && latestAssistantTurn?.command?.state === "needs_clarification") {
+    return latestReferencedIds;
   }
 
   if (asksForCheapest(prompt)) {
@@ -1374,7 +1537,8 @@ const sanitizeUnavailableRequests = (requests: string[]) =>
 const sanitizeMissingSlots = (missingSlots: BistroAiResponse["missingSlots"] | undefined) =>
   unique(
     (missingSlots ?? []).filter(
-      (slot): slot is BistroAiMissingSlot => slot === "item" || slot === "quantity",
+      (slot): slot is BistroAiMissingSlot =>
+        slot === "item" || slot === "quantity" || slot === "spice_level",
     ),
   );
 
@@ -1547,6 +1711,23 @@ const formatAddPromptSegment = (itemId: string, quantity: number, preferChinese:
   return preferChinese ? `${quantity} \u4efd ${itemName}` : `${quantity} ${itemName}`;
 };
 
+const localizedSpiceLabel = (level: string, preferChinese: boolean) => {
+  if (!preferChinese) {
+    return level;
+  }
+
+  switch (level) {
+    case "Mild":
+      return "\u5fae\u8fa3";
+    case "Medium":
+      return "\u4e2d\u8fa3";
+    case "Spicy":
+      return "\u8fa3";
+    default:
+      return level;
+  }
+};
+
 const buildItemClarificationPrompt = ({
   intent,
   itemId,
@@ -1627,6 +1808,56 @@ const buildQuantityClarificationOptions = (itemId: string, preferChinese: boolea
         preferChinese,
         quantity,
       }),
+      })),
+  );
+};
+
+const buildAddActionPrompt = (
+  action: Extract<BistroAiAction, { type: "add_item" }>,
+  preferChinese: boolean,
+) => {
+  const item = menuById.get(action.itemId);
+  const itemName = item?.name ?? action.itemId;
+  const addOnNames = resolveActionAddOnNames(item, action.addOnIds);
+
+  if (preferChinese) {
+    const modifierParts = [
+      action.spiceLevel ? localizedSpiceLabel(action.spiceLevel, true) : null,
+      addOnNames.length > 0 ? `\u52a0 ${addOnNames.join("\u3001")}` : null,
+    ].filter((part): part is string => Boolean(part));
+
+    return `\u5e2e\u6211\u52a0 ${action.quantity} \u4efd ${itemName}${modifierParts.length > 0 ? `\uff0c${modifierParts.join("\uff0c")}` : ""}`;
+  }
+
+  const modifierText = [
+    action.spiceLevel ? action.spiceLevel.toLowerCase() : null,
+    addOnNames.length > 0 ? `with ${addOnNames.join(" and ")}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+
+  return `Add ${action.quantity} ${itemName}${modifierText ? ` ${modifierText}` : ""}.`;
+};
+
+const buildSpiceClarificationOptions = (
+  action: Extract<BistroAiAction, { type: "add_item" }>,
+  preferChinese: boolean,
+) => {
+  const item = menuById.get(action.itemId);
+  if (!item?.spiceLevels?.length) {
+    return [];
+  }
+
+  return sanitizeClarificationOptions(
+    item.spiceLevels.map((spiceLevel) => ({
+      label: localizedSpiceLabel(spiceLevel, preferChinese),
+      prompt: buildAddActionPrompt(
+        {
+          ...action,
+          spiceLevel,
+        },
+        preferChinese,
+      ),
     })),
   );
 };
@@ -1637,43 +1868,60 @@ const sanitizeActions = (actions: BistroAiAction[], cartItems: BistroAiRequest["
   actions.forEach((action) => {
     switch (action.type) {
       case "add_item": {
-        if (!menuById.has(action.itemId)) {
+        const item = menuById.get(action.itemId);
+        if (!item) {
           return;
         }
 
         const quantity = Number.isFinite(action.quantity) ? Math.max(1, Math.round(action.quantity)) : 1;
         normalized.push({
           ...action,
+          addOnIds: normalizeActionAddOnIds(item, action.addOnIds),
           quantity,
+          spiceLevel: normalizeActionSpiceLevel(item, action.spiceLevel),
         });
         return;
       }
       case "set_quantity": {
-        if (!menuById.has(action.itemId)) {
+        const item = menuById.get(action.itemId);
+        if (!item) {
           return;
         }
 
-        if (!resolveSetQuantityTarget(cartItems, action)) {
+        const sanitizedAction = {
+          ...action,
+          addOnIds: normalizeActionAddOnIds(item, action.addOnIds),
+          spiceLevel: normalizeActionSpiceLevel(item, action.spiceLevel),
+        };
+
+        if (!resolveSetQuantityTarget(cartItems, sanitizedAction)) {
           return;
         }
 
         const quantity = Number.isFinite(action.quantity) ? Math.max(1, Math.round(action.quantity)) : 1;
         normalized.push({
-          ...action,
+          ...sanitizedAction,
           quantity,
         });
         return;
       }
       case "remove_item": {
-        if (!menuById.has(action.itemId)) {
+        const item = menuById.get(action.itemId);
+        if (!item) {
           return;
         }
 
-        if (!cartItems.some((item) => item.itemId === action.itemId)) {
+        const sanitizedAction = {
+          ...action,
+          addOnIds: normalizeActionAddOnIds(item, action.addOnIds),
+          spiceLevel: normalizeActionSpiceLevel(item, action.spiceLevel),
+        };
+
+        if (!cartItems.some((cartItem) => matchesActionCartVariant(cartItem, sanitizedAction))) {
           return;
         }
 
-        normalized.push(action);
+        normalized.push(sanitizedAction);
         return;
       }
       case "clear_cart": {
@@ -1686,97 +1934,274 @@ const sanitizeActions = (actions: BistroAiAction[], cartItems: BistroAiRequest["
     }
   });
 
-  return normalized;
+  return dedupeActions(normalized);
 };
 
 const inferActionsFromPrompt = (intent: BistroAiIntent, request: BistroAiRequest): BistroAiAction[] => {
   const prompt = normalizeText(request.prompt);
+  const latestReferencedIds = getLatestReferencedIds(request.conversation);
+  const latestAssistantTurn = getLatestAssistantTurn(request.conversation);
   const contextualItemIds = resolveContextualItemIds(request, prompt);
+  const pendingAddActions =
+    latestAssistantTurn?.command?.state === "needs_clarification" && latestAssistantTurn.command.intent === "add_items"
+      ? (latestAssistantTurn.actions ?? []).filter(isAddAction)
+      : [];
+  const pendingAddActionMap = new Map(pendingAddActions.map((action) => [action.itemId, action]));
+  const clarificationTargetItemId =
+    latestAssistantTurn?.command?.state === "needs_clarification" &&
+    latestAssistantTurn.missingSlots?.includes("spice_level") &&
+    latestReferencedIds.length === 1
+      ? latestReferencedIds[0]
+      : null;
+  const clarificationReplyLooksLikeModifiers =
+    clarificationTargetItemId !== null &&
+    (detectPromptSpiceLevel(prompt) !== undefined ||
+      (detectPromptAddOnIds(prompt, clarificationTargetItemId)?.length ?? 0) > 0);
   const preferredItemIds =
-    getLatestReferencedIds(request.conversation).length > 0 ? getLatestReferencedIds(request.conversation) : contextualItemIds;
-  const directMentionMatches = resolveMenuMentions(prompt, { preferredItemIds }).matches;
+    latestReferencedIds.length > 0 ? latestReferencedIds : contextualItemIds;
+  const directMentionMatches = clarificationReplyLooksLikeModifiers
+    ? []
+    : resolveMenuMentions(prompt, { preferredItemIds }).matches;
   const cartResolutionItemIds = findCartRemovalMatches(prompt, request.cartItems);
   const directMatchMap = new Map(directMentionMatches.map((match) => [match.itemId, match]));
+  const directlyMentionedItemIds = new Set(directMentionMatches.map((match) => match.itemId));
+  const cartTargetItemIds = resolveCartTargetItemIds({
+    cartItems: request.cartItems,
+    cartResolutionItemIds,
+    contextualItemIds,
+    directMentionMatches,
+  });
   const reductionQuantity = extractRequestedQuantityReduction(prompt);
+  const explicitQuantity = extractRequestedQuantity(prompt);
 
   switch (intent) {
     case "add_items":
-      return unique([
-        ...directMentionMatches.map((match) => ({
-          type: "add_item" as const,
-          itemId: match.itemId,
-          quantity: match.quantity,
-          spiceLevel: match.spiceLevel,
-        })),
-        ...contextualItemIds.map((itemId) => ({
-          type: "add_item" as const,
-          itemId,
-          quantity: 1,
-        })),
-      ]).filter(
-        (action, index, actions) =>
-          actions.findIndex((entry) => entry.type === action.type && entry.itemId === action.itemId) === index,
-      );
+      return dedupeActions([
+        ...directMentionMatches.map((match) => {
+          const item = menuById.get(match.itemId);
+          const pendingAction = pendingAddActionMap.get(match.itemId);
+
+          return {
+            type: "add_item" as const,
+            addOnIds: normalizeActionAddOnIds(
+              item,
+              mergeActionAddOnIds(match.addOnIds, pendingAction?.addOnIds),
+            ),
+            itemId: match.itemId,
+            quantity: pendingAction && explicitQuantity === null ? pendingAction.quantity : match.quantity,
+            spiceLevel: normalizeActionSpiceLevel(
+              item,
+              match.spiceLevel ?? pendingAction?.spiceLevel,
+            ),
+          };
+        }),
+        ...contextualItemIds.filter((itemId) => !directlyMentionedItemIds.has(itemId)).map((itemId) => {
+          const item = menuById.get(itemId);
+          const pendingAction = pendingAddActionMap.get(itemId);
+
+          return {
+            type: "add_item" as const,
+            addOnIds: normalizeActionAddOnIds(
+              item,
+              mergeActionAddOnIds(
+                item ? detectPromptAddOnIds(prompt, itemId) : undefined,
+                pendingAction?.addOnIds,
+              ),
+            ),
+            itemId,
+            quantity: pendingAction?.quantity ?? 1,
+            spiceLevel: normalizeActionSpiceLevel(
+              item,
+              (item?.spiceLevels?.length ? detectPromptSpiceLevel(prompt) : undefined) ?? pendingAction?.spiceLevel,
+            ),
+          };
+        }),
+      ]);
     case "remove_items":
-      return unique([
-        ...findCartRemovalMatches(prompt, request.cartItems),
-        ...contextualItemIds.filter((itemId) => request.cartItems.some((item) => item.itemId === itemId)),
-      ]).map((itemId) => ({
-        type: "remove_item" as const,
-        itemId,
-        }));
+      {
+        const targetedRemovals = directMentionMatches
+          .filter((match) =>
+            request.cartItems.some((cartItem) =>
+              matchesActionCartVariant(cartItem, {
+                itemId: match.itemId,
+                spiceLevel: match.spiceLevel,
+                addOnIds: match.addOnIds,
+              }),
+            ),
+          )
+          .map((match) => ({
+            type: "remove_item" as const,
+            addOnIds: match.addOnIds,
+            itemId: match.itemId,
+            spiceLevel: match.spiceLevel,
+          }));
+        const targetedItemIds = new Set(targetedRemovals.map((action) => action.itemId));
+        const fallbackRemovals = unique([
+          ...findCartRemovalMatches(prompt, request.cartItems),
+          ...(targetedRemovals.length === 0 ? cartTargetItemIds : []),
+        ])
+          .filter((itemId) => !targetedItemIds.has(itemId))
+          .map((itemId) => ({
+            type: "remove_item" as const,
+            itemId,
+          }));
+
+        return dedupeActions([...targetedRemovals, ...fallbackRemovals]);
+      }
     case "update_items": {
       if (reductionQuantity !== null) {
-        return unique([
-          ...directMentionMatches.map((match) => match.itemId),
-          ...cartResolutionItemIds,
-          ...contextualItemIds.filter((itemId) => request.cartItems.some((item) => item.itemId === itemId)),
-        ])
-          .filter((itemId) => request.cartItems.some((item) => item.itemId === itemId))
-          .flatMap<BistroAiAction>((itemId) => {
-            const directMatch = directMatchMap.get(itemId);
-            const target = resolveSetQuantityTarget(request.cartItems, {
-              itemId,
-              spiceLevel: directMatch?.spiceLevel,
-            });
+        return cartTargetItemIds.flatMap<BistroAiAction>((itemId) => {
+          const directMatch = directMatchMap.get(itemId);
+          const target = resolveSetQuantityTarget(request.cartItems, {
+            addOnIds: directMatch?.addOnIds,
+            itemId,
+            spiceLevel: directMatch?.spiceLevel,
+          });
 
-            if (!target) {
-              return [];
-            }
+          if (!target) {
+            return [];
+          }
 
-            const nextQuantity = target.quantity - reductionQuantity;
-            if (nextQuantity <= 0) {
-              return [{ type: "remove_item" as const, itemId }];
-            }
-
+          const nextQuantity = target.quantity - reductionQuantity;
+          if (nextQuantity <= 0) {
             return [
               {
-                type: "set_quantity" as const,
+                type: "remove_item" as const,
+                addOnIds: directMatch?.addOnIds ?? target.addOns.map((addOn) => addOn.id),
                 itemId,
-                quantity: nextQuantity,
                 spiceLevel: directMatch?.spiceLevel ?? target.spiceLevel,
               },
             ];
-          });
+          }
+
+          return [
+            {
+              type: "set_quantity" as const,
+              addOnIds: directMatch?.addOnIds ?? target.addOns.map((addOn) => addOn.id),
+              itemId,
+              quantity: nextQuantity,
+              spiceLevel: directMatch?.spiceLevel ?? target.spiceLevel,
+            },
+          ];
+        });
       }
 
       const quantity = extractRequestedQuantity(prompt);
       if (quantity === null) {
-        return [];
+        return cartTargetItemIds.flatMap<BistroAiAction>((itemId) => {
+          const directMatch = directMatchMap.get(itemId);
+          if (!directMatch || (!directMatch.spiceLevel && !Array.isArray(directMatch.addOnIds))) {
+            return [];
+          }
+
+          const requestedVariant = {
+            addOnIds: directMatch.addOnIds,
+            itemId,
+            spiceLevel: directMatch.spiceLevel,
+          };
+          const exactTarget = resolveSetQuantityTarget(request.cartItems, requestedVariant);
+          if (exactTarget && !actionHasModifierChange(exactTarget, { ...requestedVariant, type: "set_quantity", quantity: exactTarget.quantity })) {
+            return [];
+          }
+
+          const baseTarget = resolveSetQuantityTarget(request.cartItems, {
+            addOnIds: directMatch.addOnIds,
+            itemId,
+          });
+          if (!baseTarget) {
+            return [];
+          }
+
+          const nextAddAction = {
+            type: "add_item" as const,
+            addOnIds: directMatch.addOnIds ?? baseTarget.addOns.map((addOn) => addOn.id),
+            itemId,
+            quantity: baseTarget.quantity,
+            spiceLevel: directMatch.spiceLevel ?? baseTarget.spiceLevel,
+          };
+
+          if (!actionHasModifierChange(baseTarget, { ...nextAddAction, type: "set_quantity" })) {
+            return [];
+          }
+
+          return [
+            {
+              type: "remove_item" as const,
+              addOnIds: baseTarget.addOns.map((addOn) => addOn.id),
+              itemId,
+              spiceLevel: baseTarget.spiceLevel,
+            },
+            nextAddAction,
+          ];
+        });
       }
 
-      return unique([
-        ...directMentionMatches.map((match) => match.itemId),
-        ...cartResolutionItemIds,
-        ...contextualItemIds.filter((itemId) => request.cartItems.some((item) => item.itemId === itemId)),
-      ])
-        .filter((itemId) => request.cartItems.some((item) => item.itemId === itemId))
-        .map((itemId) => ({
-          type: "set_quantity" as const,
+      return cartTargetItemIds.flatMap<BistroAiAction>((itemId) => {
+        const directMatch = directMatchMap.get(itemId);
+        const exactTarget = resolveSetQuantityTarget(request.cartItems, {
+          addOnIds: directMatch?.addOnIds,
+          itemId,
+          spiceLevel: directMatch?.spiceLevel,
+        });
+
+        if (exactTarget) {
+          return [
+            {
+              type: "set_quantity" as const,
+              addOnIds: directMatch?.addOnIds,
+              itemId,
+              quantity,
+              spiceLevel: directMatch?.spiceLevel,
+            },
+          ];
+        }
+
+        const baseTarget = resolveSetQuantityTarget(request.cartItems, {
+          addOnIds: directMatch?.addOnIds,
+          itemId,
+        });
+        if (!directMatch || !baseTarget) {
+          return [
+            {
+              type: "set_quantity" as const,
+              addOnIds: directMatchMap.get(itemId)?.addOnIds,
+              itemId,
+              quantity,
+              spiceLevel: directMatchMap.get(itemId)?.spiceLevel,
+            },
+          ];
+        }
+
+        const nextAddAction = {
+          type: "add_item" as const,
+          addOnIds: directMatch.addOnIds ?? baseTarget.addOns.map((addOn) => addOn.id),
           itemId,
           quantity,
-          spiceLevel: directMatchMap.get(itemId)?.spiceLevel,
-        }));
+          spiceLevel: directMatch.spiceLevel ?? baseTarget.spiceLevel,
+        };
+
+        if (!actionHasModifierChange(baseTarget, { ...nextAddAction, type: "set_quantity" })) {
+          return [
+            {
+              type: "set_quantity" as const,
+              addOnIds: directMatch.addOnIds,
+              itemId,
+              quantity,
+              spiceLevel: directMatch.spiceLevel,
+            },
+          ];
+        }
+
+        return [
+          {
+            type: "remove_item" as const,
+            addOnIds: baseTarget.addOns.map((addOn) => addOn.id),
+            itemId,
+            spiceLevel: baseTarget.spiceLevel,
+          },
+          nextAddAction,
+        ];
+      });
     }
     case "clear_cart":
       return isClearCartIntent(prompt) && request.cartItems.length > 0 ? [{ type: "clear_cart" as const }] : [];
@@ -1888,11 +2313,68 @@ const inferSuggestionsFromPrompt = (request: BistroAiRequest, intent: BistroAiIn
 };
 
 const buildActionReply = (actions: BistroAiAction[], preferChinese: boolean) => {
+  const addActions = actions.filter(isAddAction);
+  const removeActions = actions.filter(
+    (action): action is Extract<BistroAiAction, { type: "remove_item" }> => action.type === "remove_item",
+  );
+  const replacementPairs = addActions.reduce<
+    Array<{
+      addAction: Extract<BistroAiAction, { type: "add_item" }>;
+      removeAction: Extract<BistroAiAction, { type: "remove_item" }>;
+    }>
+  >((pairs, addAction) => {
+    const removeAction = removeActions.find((candidate) => {
+      if (candidate.itemId !== addAction.itemId) {
+        return false;
+      }
+
+      return !pairs.some((pair) => pair.removeAction === candidate);
+    });
+
+    if (!removeAction) {
+      return pairs;
+    }
+
+    pairs.push({ addAction, removeAction });
+    return pairs;
+  }, []);
+
+  if (replacementPairs.length > 0 && replacementPairs.length === addActions.length && replacementPairs.length === removeActions.length) {
+    const lines = replacementPairs.map(({ addAction, removeAction }) => {
+      const itemName = menuById.get(addAction.itemId)?.name ?? addAction.itemId;
+      const fromModifier = formatActionModifierSummary(removeAction);
+      const toModifier = formatActionModifierSummary(addAction);
+      const changeLabel =
+        fromModifier && toModifier
+          ? preferChinese
+            ? `从 ${fromModifier} 改成 ${toModifier}`
+            : `from ${fromModifier} to ${toModifier}`
+          : toModifier
+            ? preferChinese
+              ? `改成 ${toModifier}`
+              : `to ${toModifier}`
+            : preferChinese
+              ? "调整成标准款"
+              : "to the standard version";
+
+      return preferChinese
+        ? `${itemName} ${changeLabel}，数量 ${addAction.quantity}`
+        : `${itemName} ${changeLabel} with quantity ${addAction.quantity}`;
+    });
+
+    return preferChinese
+      ? `我可以把 ${lines.join(" 和 ")}。请确认下面的购物车变更。`
+      : `I can swap ${lines.join(" and ")}. Review the cart changes below.`;
+  }
+
   const setQuantityActions = actions.filter(isSetQuantityAction);
   if (setQuantityActions.length > 0) {
     const lines = setQuantityActions.map((action) => {
       const itemName = menuById.get(action.itemId)?.name ?? action.itemId;
-      return preferChinese ? `${itemName} \u8c03\u6574\u4e3a ${action.quantity}` : `${itemName} to ${action.quantity}`;
+      const modifierLabel = formatActionModifierLabel(action);
+      return preferChinese
+        ? `${itemName}${modifierLabel} \u8c03\u6574\u4e3a ${action.quantity}`
+        : `${itemName}${modifierLabel} to ${action.quantity}`;
     });
 
     return preferChinese
@@ -1900,11 +2382,10 @@ const buildActionReply = (actions: BistroAiAction[], preferChinese: boolean) => 
       : `I can set ${lines.join(" and ")}. Review the quantity changes below.`;
   }
 
-  const addActions = actions.filter(isAddAction);
   if (addActions.length > 0) {
     const lines = addActions.map((action) => {
       const itemName = menuById.get(action.itemId)?.name ?? action.itemId;
-      return `${action.quantity} x ${itemName}`;
+      return `${action.quantity} x ${itemName}${formatActionModifierLabel(action)}`;
     });
 
     return preferChinese
@@ -1915,7 +2396,7 @@ const buildActionReply = (actions: BistroAiAction[], preferChinese: boolean) => 
   if (actions.some((action) => action.type === "remove_item")) {
     const labels = actions
       .filter((action): action is Extract<BistroAiAction, { type: "remove_item" }> => action.type === "remove_item")
-      .map((action) => menuById.get(action.itemId)?.name ?? action.itemId);
+      .map((action) => `${menuById.get(action.itemId)?.name ?? action.itemId}${formatActionModifierLabel(action)}`);
 
     return preferChinese
       ? `\u6211\u5728\u4f60\u7684\u8d2d\u7269\u8f66\u91cc\u627e\u5230\u4e86 ${labels.join(" \u548c ")}\u3002\u8bf7\u786e\u8ba4\u4e0b\u9762\u7684\u5220\u9664\u64cd\u4f5c\u3002`
@@ -2158,6 +2639,7 @@ const buildClarificationReply = ({
   missingSlots,
   preferChinese,
   quantityTargetItemId,
+  spiceTargetItemId,
   subject,
 }: {
   hasMatchedActions: boolean;
@@ -2165,9 +2647,30 @@ const buildClarificationReply = ({
   missingSlots: BistroAiMissingSlot[];
   preferChinese: boolean;
   quantityTargetItemId?: string | null;
+  spiceTargetItemId?: string | null;
   subject?: string;
 }) => {
   const quantityTargetName = quantityTargetItemId ? menuById.get(quantityTargetItemId)?.name ?? quantityTargetItemId : null;
+  const spiceTargetItem = spiceTargetItemId ? menuById.get(spiceTargetItemId) : null;
+
+  if (missingSlots.includes("spice_level") && spiceTargetItem) {
+    const spiceChoices = spiceTargetItem.spiceLevels?.map((level) => localizedSpiceLabel(level, preferChinese)).join("/") ?? "";
+    const addOnNote = spiceTargetItem.addOns?.length
+      ? preferChinese
+        ? `\u5982\u679c\u8fd8\u60f3\u52a0\u6599\uff0c\u4e5f\u53ef\u4ee5\u76f4\u63a5\u56de ${spiceTargetItem.addOns
+            .map((addOn) => addOn.name)
+            .slice(0, 3)
+            .join("\u3001")}\u3002`
+        : `You can also mention add-ons like ${spiceTargetItem.addOns
+            .map((addOn) => addOn.name)
+            .slice(0, 3)
+            .join(", ")}.`
+      : "";
+
+    return preferChinese
+      ? `${spiceTargetItem.name} \u8fd8\u5dee\u8fa3\u5ea6\u3002\u5148\u9009 ${spiceChoices}\u3002${addOnNote}`.trim()
+      : `${spiceTargetItem.name} still needs a spice level. Pick ${spiceChoices}.${addOnNote ? ` ${addOnNote}` : ""}`;
+  }
 
   if (missingSlots.includes("quantity") && quantityTargetName) {
     return preferChinese
@@ -2481,6 +2984,22 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     unavailableRequests = [];
   }
 
+  const spiceClarificationAction =
+    actionIntent &&
+    explicitActionIntent &&
+    !budgetReplyState &&
+    intent === "add_items" &&
+    actions.length === 1 &&
+    actions[0]?.type === "add_item" &&
+    unresolvedMenuPhrases.length === 0 &&
+    !ambiguousContextReference
+      ? (() => {
+          const action = actions[0];
+          const item = menuById.get(action.itemId);
+          return item?.spiceLevels?.length && !action.spiceLevel ? action : null;
+        })()
+      : null;
+  const spiceTargetItemId = spiceClarificationAction?.itemId ?? null;
   const inferredMissingSlots: BistroAiMissingSlot[] = [];
   const missingUpdateQuantity =
     actionIntent &&
@@ -2499,6 +3018,10 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
 
   if (missingUpdateQuantity) {
     inferredMissingSlots.push("quantity");
+  }
+
+  if (spiceClarificationAction) {
+    inferredMissingSlots.push("spice_level");
   }
 
   if (
@@ -2563,6 +3086,10 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     );
   }
 
+  if (missingSlots.includes("spice_level") && spiceClarificationAction && clarificationOptions.length === 0) {
+    clarificationOptions = buildSpiceClarificationOptions(spiceClarificationAction, preferChinese);
+  }
+
   const hasExecutableActionSet =
     actionIntent &&
     explicitActionIntent &&
@@ -2590,6 +3117,8 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
       referencedItemIds = unique([...clarificationCandidateItemIds, ...referencedItemIds]).slice(0, 4);
     } else if (quantityTargetItemId) {
       referencedItemIds = unique([quantityTargetItemId, ...referencedItemIds]).slice(0, 4);
+    } else if (spiceTargetItemId) {
+      referencedItemIds = unique([spiceTargetItemId, ...referencedItemIds]).slice(0, 4);
     }
   } else {
     missingSlots = [];
@@ -2654,6 +3183,7 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
       missingSlots,
       preferChinese,
       quantityTargetItemId,
+      spiceTargetItemId,
       subject: extractClarificationSubject(firstUnresolvedPhrase),
     });
   } else if (explicitActionIntent && actions.length > 0) {

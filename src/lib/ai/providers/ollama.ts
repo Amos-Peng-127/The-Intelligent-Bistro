@@ -45,6 +45,10 @@ const responseSchema = {
           itemId: { type: "string" },
           quantity: { type: "integer", minimum: 1 },
           spiceLevel: { type: "string" },
+          addOnIds: {
+            type: "array",
+            items: { type: "string" },
+          },
         },
         required: ["type"],
         additionalProperties: false,
@@ -66,7 +70,7 @@ const responseSchema = {
       type: "array",
       items: {
         type: "string",
-        enum: ["item", "quantity"],
+        enum: ["item", "quantity", "spice_level"],
       },
     },
     clarificationOptions: {
@@ -102,6 +106,10 @@ const responseSchema = {
           enum: ["rolls", "ramen", "appetizers", "salads"],
         },
         spiceLevel: { type: "string" },
+        addOnIds: {
+          type: "array",
+          items: { type: "string" },
+        },
         sortBy: {
           type: "string",
           enum: ["relevance", "price"],
@@ -176,6 +184,7 @@ Safety rules:
 - If the user asks a follow-up like "what are those dishes like", use the recent conversation.
 - Keep actions empty unless the order edit is explicit.
 - Use set_quantity when the user wants an existing cart item changed to a specific quantity, such as "change mango salmon delight to one".
+- When the user specifies spice or add-ons, include spiceLevel and/or addOnIds in the action or selectionPlan.
 - Never say an item has already been added, removed, or cleared unless the cart change is only being proposed for confirmation.
 - If the target depends on context, ranking, comparison, price, or relative language like "this", "that", "the cheapest one", or "the second one", use selectionPlan instead of guessing a final item id in actions.
 - Use actions directly only when the item ids are explicit and unambiguous right now.
@@ -184,10 +193,11 @@ Safety rules:
 - For quantity changes that depend on cart context, use selectionPlan.source=current_cart and include selectionPlan.quantity.
 - Use selectionPlan.sortBy=price with sortDirection=asc for "cheapest" and sortDirection=desc for "most expensive".
 - Only use menu item ids that exist in the catalog.
+- Only use addOnIds that belong to the selected menu item.
 - If you recommend or explain dishes, include real item ids in referencedItemIds. Put recommendation ids in suggestedItemIds too when relevant.
 - If the user asks to remove something not in the current cart, explain that and return no actions.
 - If you are unsure which dish the user means, ask a short clarification question and return no actions.
-- If you need clarification, fill missingSlots with item and/or quantity, and provide 2 to 4 clarificationOptions with short labels and natural next-user prompts.
+- If you need clarification, fill missingSlots with item, quantity, and/or spice_level, and provide 2 to 4 clarificationOptions with short labels and natural next-user prompts.
 - clarificationOptions should be grounded in the menu or current cart. Do not invent dishes or ids.
 - Do not invent prices, items, or add-ons.
 - Keep the reply concise and helpful.`;
@@ -219,7 +229,14 @@ const normalizeMissingSlots = (value: unknown): BistroAiMissingSlot[] => {
     return [];
   }
 
-  return [...new Set(value.filter((entry): entry is BistroAiMissingSlot => entry === "item" || entry === "quantity"))];
+  return [
+    ...new Set(
+      value.filter(
+        (entry): entry is BistroAiMissingSlot =>
+          entry === "item" || entry === "quantity" || entry === "spice_level",
+      ),
+    ),
+  ];
 };
 
 const normalizeClarificationOptions = (value: unknown): BistroAiClarificationOption[] => {
@@ -290,6 +307,12 @@ const normalizeSelectionPlan = (value: unknown): BistroAiSelectionPlan | null =>
     normalized.spiceLevel = rawPlan.spiceLevel.trim();
   }
 
+  const hasAddOnIds = Array.isArray(rawPlan.addOnIds);
+  const addOnIds = normalizeStringArray(rawPlan.addOnIds);
+  if (hasAddOnIds) {
+    normalized.addOnIds = [...new Set(addOnIds)];
+  }
+
   if (rawPlan.sortBy === "relevance" || rawPlan.sortBy === "price") {
     normalized.sortBy = rawPlan.sortBy;
   }
@@ -312,6 +335,7 @@ const normalizeSelectionPlan = (value: unknown): BistroAiSelectionPlan | null =>
     !normalized.tags &&
     !normalized.category &&
     !normalized.spiceLevel &&
+    !normalized.addOnIds &&
     !normalized.sortBy &&
     !normalized.sortDirection &&
     !normalized.take &&
@@ -447,16 +471,25 @@ const extractLooseActions = (content: string): BistroAiAction[] => {
       continue;
     }
 
+    const spiceLevel = extractJsonStringField(rawAction, "spiceLevel") ?? undefined;
+    const hasAddOnIds = /"addOnIds"\s*:\s*\[/.test(rawAction);
+    const addOnIds = extractJsonStringArrayField(rawAction, "addOnIds");
+
     if (type === "remove_item") {
-      actions.push({ type: "remove_item", itemId });
+      actions.push({
+        type: "remove_item",
+        addOnIds: hasAddOnIds ? addOnIds : undefined,
+        itemId,
+        spiceLevel,
+      });
       continue;
     }
 
     if (type === "add_item" || type === "set_quantity") {
       const quantityMatch = /"quantity"\s*:\s*(\d+)/.exec(rawAction);
-      const spiceLevel = extractJsonStringField(rawAction, "spiceLevel") ?? undefined;
       actions.push({
         type,
+        addOnIds: hasAddOnIds ? addOnIds : undefined,
         itemId,
         quantity: quantityMatch ? Math.max(1, Number(quantityMatch[1])) : 1,
         spiceLevel,
@@ -476,6 +509,8 @@ const extractLooseSelectionPlan = (content: string) => {
 
   const rawPlan = match[1];
 
+  const hasAddOnIds = /"addOnIds"\s*:\s*\[/.test(rawPlan);
+
   return normalizeSelectionPlan({
     source: extractJsonStringField(rawPlan, "source") ?? "menu",
     itemIds: extractJsonStringArrayField(rawPlan, "itemIds"),
@@ -483,6 +518,7 @@ const extractLooseSelectionPlan = (content: string) => {
     tags: extractJsonStringArrayField(rawPlan, "tags"),
     category: extractJsonStringField(rawPlan, "category") ?? undefined,
     spiceLevel: extractJsonStringField(rawPlan, "spiceLevel") ?? undefined,
+    addOnIds: hasAddOnIds ? extractJsonStringArrayField(rawPlan, "addOnIds") : undefined,
     sortBy: extractJsonStringField(rawPlan, "sortBy") ?? undefined,
     sortDirection: extractJsonStringField(rawPlan, "sortDirection") ?? undefined,
     take: (() => {
@@ -534,8 +570,11 @@ const normalizeActions = (actions: unknown): BistroAiAction[] => {
     const rawAction = action as Record<string, unknown>;
 
     if (rawAction.type === "add_item" && typeof rawAction.itemId === "string") {
+      const hasAddOnIds = Array.isArray(rawAction.addOnIds);
+      const addOnIds = normalizeStringArray(rawAction.addOnIds);
       normalized.push({
         type: "add_item",
+        addOnIds: hasAddOnIds ? [...new Set(addOnIds)] : undefined,
         itemId: rawAction.itemId,
         quantity:
           typeof rawAction.quantity === "number" && rawAction.quantity > 0
@@ -547,8 +586,11 @@ const normalizeActions = (actions: unknown): BistroAiAction[] => {
     }
 
     if (rawAction.type === "set_quantity" && typeof rawAction.itemId === "string") {
+      const hasAddOnIds = Array.isArray(rawAction.addOnIds);
+      const addOnIds = normalizeStringArray(rawAction.addOnIds);
       normalized.push({
         type: "set_quantity",
+        addOnIds: hasAddOnIds ? [...new Set(addOnIds)] : undefined,
         itemId: rawAction.itemId,
         quantity:
           typeof rawAction.quantity === "number" && rawAction.quantity > 0
@@ -560,9 +602,13 @@ const normalizeActions = (actions: unknown): BistroAiAction[] => {
     }
 
     if (rawAction.type === "remove_item" && typeof rawAction.itemId === "string") {
+      const hasAddOnIds = Array.isArray(rawAction.addOnIds);
+      const addOnIds = normalizeStringArray(rawAction.addOnIds);
       normalized.push({
         type: "remove_item",
+        addOnIds: hasAddOnIds ? [...new Set(addOnIds)] : undefined,
         itemId: rawAction.itemId,
+        spiceLevel: typeof rawAction.spiceLevel === "string" ? rawAction.spiceLevel : undefined,
       });
       return normalized;
     }
@@ -654,7 +700,15 @@ const buildConversationCatalog = (conversation: BistroAiConversationTurn[] = [])
             .map((action) =>
               action.type === "clear_cart"
                 ? "clear_cart"
-                : `${action.type}:${action.itemId}${action.type === "add_item" || action.type === "set_quantity" ? `:${action.quantity}` : ""}`,
+                : [
+                    action.type,
+                    action.itemId,
+                    action.type === "add_item" || action.type === "set_quantity" ? action.quantity : null,
+                    "spiceLevel" in action ? action.spiceLevel ?? null : null,
+                    "addOnIds" in action && Array.isArray(action.addOnIds) ? action.addOnIds.join("+") : null,
+                  ]
+                    .filter((part) => part !== null && part !== "")
+                    .join(":"),
             )
             .join(", ")}`,
         );
@@ -704,16 +758,13 @@ const buildStructuredFallback = (prompt: string, content?: string): BistroAiResp
   selectionPlan: null,
 });
 
-export async function submitOllamaOrderPrompt(
-  {
-    prompt,
-    cartItems,
-    conversation,
-  }: BistroAiRequest,
-  config: OllamaRuntimeConfig,
-): Promise<BistroAiResponse> {
+const ollamaKeepAlive = "15m";
+const ollamaRequestTimeoutMs = 45000;
+const ollamaWarmTimeoutMs = 30000;
+
+export async function warmOllamaModel(config: OllamaRuntimeConfig) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), ollamaWarmTimeoutMs);
 
   const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
     method: "POST",
@@ -723,6 +774,48 @@ export async function submitOllamaOrderPrompt(
     signal: controller.signal,
     body: JSON.stringify({
       model: config.ollamaModel,
+      keep_alive: ollamaKeepAlive,
+      messages: [],
+    }),
+  })
+    .catch((error) => {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("The local model warm-up timed out.");
+      }
+
+      throw new Error(
+        `Could not reach Ollama at ${config.ollamaBaseUrl}. Start Ollama and make sure ${config.ollamaModel} is pulled.`,
+      );
+    })
+    .finally(() => clearTimeout(timeoutId));
+
+  const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+  if (!response.ok || payload?.error) {
+    throw new Error(payload?.error ?? "The local model warm-up failed.");
+  }
+}
+
+export async function submitOllamaOrderPrompt(
+  {
+    prompt,
+    cartItems,
+    conversation,
+  }: BistroAiRequest,
+  config: OllamaRuntimeConfig,
+): Promise<BistroAiResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+
+  const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    signal: controller.signal,
+    body: JSON.stringify({
+      model: config.ollamaModel,
+      keep_alive: ollamaKeepAlive,
       stream: false,
       format: responseSchema,
       options: {
@@ -755,7 +848,7 @@ export async function submitOllamaOrderPrompt(
     .catch((error) => {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(
-          "The local model took too long to answer. Try a simpler request or switch to a larger model later.",
+          "The local model took too long to answer. It may still be warming up, so try again in a moment.",
         );
       }
 

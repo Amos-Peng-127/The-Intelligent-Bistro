@@ -336,6 +336,96 @@ const detectSpiceLevel = (prompt: string) => {
   return undefined;
 };
 
+export const detectPromptSpiceLevel = (prompt: string) => detectSpiceLevel(prompt);
+
+const addOnAliasCache = new Map<string, string[]>();
+
+const buildAddOnAliases = (name: string) => {
+  const normalizedName = normalizeText(name);
+  const aliases = new Set<string>([normalizedName]);
+  const withoutPrefix = normalizedName.replace(/^(extra|marinated)\s+/, "").trim();
+  if (withoutPrefix && withoutPrefix !== normalizedName) {
+    aliases.add(withoutPrefix);
+  }
+
+  const tokens = splitTokens(normalizedName);
+  const lastToken = tokens[tokens.length - 1];
+  if (lastToken && lastToken.length >= 3) {
+    aliases.add(lastToken);
+  }
+
+  buildContiguousPhrases(tokens).forEach((alias) => aliases.add(alias));
+
+  return [...aliases].sort((left, right) => right.length - left.length);
+};
+
+const getAddOnAliases = (addOnId: string, name: string) => {
+  const cacheKey = `${addOnId}:${name}`;
+  const cached = addOnAliasCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const aliases = buildAddOnAliases(name);
+  addOnAliasCache.set(cacheKey, aliases);
+  return aliases;
+};
+
+const stripItemAliasesFromPrompt = (prompt: string, itemId: string) => {
+  const entry = menuIndex.find((candidate) => candidate.item.id === itemId);
+  if (!entry) {
+    return prompt;
+  }
+
+  return entry.aliases.reduce((value, alias) => {
+    if (!alias) {
+      return value;
+    }
+
+    if (hasChineseCharacters(alias)) {
+      return value.replace(new RegExp(escapeRegex(alias), "gi"), " ");
+    }
+
+    return value.replace(new RegExp(`\\b${escapeRegex(alias)}\\b`, "gi"), " ");
+  }, prompt);
+};
+
+const promptIncludesAlias = (prompt: string, alias: string) =>
+  hasChineseCharacters(alias)
+    ? prompt.includes(alias)
+    : new RegExp(`\\b${escapeRegex(alias)}\\b`, "i").test(prompt);
+
+const detectAddOnIds = (prompt: string, item: (typeof menuItems)[number]) => {
+  if (!item.addOns?.length) {
+    return undefined;
+  }
+
+  const normalizedPrompt = normalizeText(stripItemAliasesFromPrompt(prompt, item.id));
+  const addOnIds = item.addOns.flatMap((addOn) =>
+    getAddOnAliases(addOn.id, addOn.name).some((alias) => promptIncludesAlias(normalizedPrompt, alias))
+      ? [addOn.id]
+      : [],
+  );
+
+  return addOnIds.length > 0 ? uniqueValues(addOnIds) : undefined;
+};
+
+export const detectPromptAddOnIds = (prompt: string, itemId: string) => {
+  const item = menuItems.find((candidate) => candidate.id === itemId);
+  return item ? detectAddOnIds(prompt, item) : undefined;
+};
+
+const resolveAddOnOnlySegment = (prompt: string, itemIds: Iterable<string>) => {
+  for (const itemId of itemIds) {
+    const item = menuItems.find((candidate) => candidate.id === itemId);
+    if (item && detectAddOnIds(prompt, item)?.length) {
+      return item.id;
+    }
+  }
+
+  return null;
+};
+
 const buildAddReply = (actions: BistroAiAction[], preferChinese = false) => {
   const lines = actions.flatMap((action) =>
     action.type === "add_item" ? [`${action.quantity} x ${menuItems.find((item) => item.id === action.itemId)?.name ?? action.itemId}`] : [],
@@ -410,6 +500,7 @@ const recommendationIntentKeywords = [
 
 type ExactMenuHit = {
   alias: string;
+  addOnIds?: string[];
   end: number;
   itemId: string;
   quantity: number;
@@ -418,6 +509,7 @@ type ExactMenuHit = {
 };
 
 type MenuMentionMatch = {
+  addOnIds?: string[];
   itemId: string;
   quantity: number;
   spiceLevel?: string;
@@ -432,6 +524,7 @@ type MenuMentionResolution = {
 const findExactMenuHits = (prompt: string) => {
   const hits: Array<{
     alias: string;
+    addOnIds?: string[];
     end: number;
     itemId: string;
     quantity: number;
@@ -453,16 +546,18 @@ const findExactMenuHits = (prompt: string) => {
       const start = match.index;
       const end = start + match[0].length;
       const prefix = prompt.slice(Math.max(0, start - 20), start);
-      const localWindow = prompt.slice(Math.max(0, start - 10), Math.min(prompt.length, end + 10));
+      const localWindow = prompt.slice(Math.max(0, start - 16), Math.min(prompt.length, end + 60));
       const localSpice =
         alias.includes("spicy") && item.spiceLevels?.length
           ? "Spicy"
           : item.spiceLevels?.length
             ? detectSpiceLevel(localWindow)
             : undefined;
+      const addOnIds = detectAddOnIds(localWindow, item);
 
       hits.push({
         alias,
+        addOnIds,
         itemId: item.id,
         quantity: readQuantity(prefix),
         spiceLevel: localSpice,
@@ -488,6 +583,7 @@ const findExactMenuHits = (prompt: string) => {
 
     matches.set(hit.itemId, {
       alias: hit.alias,
+      addOnIds: hit.addOnIds,
       end: hit.end,
       itemId: hit.itemId,
       quantity: hit.quantity,
@@ -789,6 +885,11 @@ export const resolveMenuMentions = (
       excludeItemIds: resolvedItemIds,
       preferredItemIds,
     });
+    const addOnOnlyItemId = resolveAddOnOnlySegment(cleanedSegment, [...resolvedItemIds, ...preferredItemIds]);
+
+    if (addOnOnlyItemId) {
+      return;
+    }
 
     if (!looksLikeMenuMention(cleanedSegment) && !contextualCategoryItemId) {
       if (getSegmentCategories(cleanedSegment).length > 0) {
@@ -800,6 +901,7 @@ export const resolveMenuMentions = (
     if (contextualCategoryItemId) {
       const item = menuItems.find((entry) => entry.id === contextualCategoryItemId);
       fuzzyMatches.push({
+        addOnIds: item ? detectAddOnIds(segment.text, item) : undefined,
         itemId: contextualCategoryItemId,
         quantity: readQuantity(segment.text),
         spiceLevel: item?.spiceLevels?.length ? detectSpiceLevel(segment.text) : undefined,
@@ -821,6 +923,7 @@ export const resolveMenuMentions = (
 
     const item = menuItems.find((entry) => entry.id === candidate.itemId);
     fuzzyMatches.push({
+      addOnIds: item ? detectAddOnIds(segment.text, item) : undefined,
       itemId: candidate.itemId,
       quantity: readQuantity(segment.text),
       spiceLevel: item?.spiceLevels?.length ? detectSpiceLevel(segment.text) : undefined,
@@ -831,7 +934,8 @@ export const resolveMenuMentions = (
 
   return {
     matches: [
-      ...exactMatches.map(({ itemId, quantity, spiceLevel, source }) => ({
+      ...exactMatches.map(({ addOnIds, itemId, quantity, spiceLevel, source }) => ({
+        addOnIds,
         itemId,
         quantity,
         spiceLevel,
@@ -1043,6 +1147,7 @@ export const parseOrderWithRules = ({
 
     const actions: BistroAiAction[] = matches.map((match) => ({
       type: "add_item",
+      addOnIds: match.addOnIds,
       itemId: match.itemId,
       quantity: match.quantity,
       spiceLevel: match.spiceLevel,

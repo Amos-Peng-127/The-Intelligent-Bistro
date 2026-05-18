@@ -16,16 +16,20 @@ export type BistroAiAction =
       itemId: string;
       quantity: number;
       spiceLevel?: string;
+      addOnIds?: string[];
     }
   | {
       type: "set_quantity";
       itemId: string;
       quantity: number;
       spiceLevel?: string;
+      addOnIds?: string[];
     }
   | {
       type: "remove_item";
       itemId: string;
+      spiceLevel?: string;
+      addOnIds?: string[];
     }
   | {
       type: "clear_cart";
@@ -54,13 +58,14 @@ export type BistroAiSelectionPlan = {
   tags?: string[];
   category?: Exclude<MenuCategoryId, "featured">;
   spiceLevel?: string;
+  addOnIds?: string[];
   sortBy?: "relevance" | "price";
   sortDirection?: "asc" | "desc";
   take?: number;
   quantity?: number;
 };
 
-export type BistroAiMissingSlot = "item" | "quantity";
+export type BistroAiMissingSlot = "item" | "quantity" | "spice_level";
 
 export type BistroAiClarificationOption = {
   label: string;

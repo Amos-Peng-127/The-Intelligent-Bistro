@@ -12,9 +12,16 @@ export type CartItem = {
   image: MenuItem["image"];
 };
 
+type CartItemOptions = {
+  quantity?: number;
+  spiceLevel?: string;
+  addOns?: AddOn[];
+};
+
 type CartState = {
   items: CartItem[];
-  addItem: (item: MenuItem, options?: { quantity?: number; spiceLevel?: string; addOns?: AddOn[] }) => void;
+  addItem: (item: MenuItem, options?: CartItemOptions) => void;
+  updateItemConfiguration: (cartId: string, item: MenuItem, options: CartItemOptions & { quantity: number }) => void;
   updateQuantity: (cartId: string, quantity: number) => void;
   removeItem: (cartId: string) => void;
   clearCart: () => void;
@@ -25,12 +32,25 @@ const makeCartId = (item: MenuItem, spiceLevel?: string, addOns: AddOn[] = []) =
   return [item.id, spiceLevel ?? "standard", addOnKey || "none"].join("__");
 };
 
+const normalizeAddOns = (addOns: AddOn[] = []) => {
+  const seen = new Set<string>();
+
+  return addOns.filter((addOn) => {
+    if (seen.has(addOn.id)) {
+      return false;
+    }
+
+    seen.add(addOn.id);
+    return true;
+  });
+};
+
 export const useCartStore = create<CartState>((set) => ({
   items: [],
   addItem: (item, options) =>
     set((state) => {
       const quantity = options?.quantity ?? 1;
-      const addOns = options?.addOns ?? [];
+      const addOns = normalizeAddOns(options?.addOns ?? []);
       const cartId = makeCartId(item, options?.spiceLevel, addOns);
       const existing = state.items.find((cartItem) => cartItem.cartId === cartId);
 
@@ -58,6 +78,64 @@ export const useCartStore = create<CartState>((set) => ({
             image: item.image,
           },
         ],
+      };
+    }),
+  updateItemConfiguration: (cartId, item, options) =>
+    set((state) => {
+      const currentIndex = state.items.findIndex((cartItem) => cartItem.cartId === cartId);
+      if (currentIndex < 0) {
+        return state;
+      }
+
+      const quantity = Math.max(1, Math.round(options.quantity));
+      const addOns = normalizeAddOns(options.addOns ?? []);
+      const nextCartId = makeCartId(item, options.spiceLevel, addOns);
+
+      if (nextCartId === cartId) {
+        return {
+          items: state.items.map((cartItem) =>
+            cartItem.cartId === cartId
+              ? {
+                  ...cartItem,
+                  addOns,
+                  quantity,
+                  spiceLevel: options.spiceLevel,
+                }
+              : cartItem,
+          ),
+        };
+      }
+
+      const itemsWithoutCurrent = state.items.filter((cartItem) => cartItem.cartId !== cartId);
+      const existingIndex = itemsWithoutCurrent.findIndex((cartItem) => cartItem.cartId === nextCartId);
+
+      if (existingIndex >= 0) {
+        return {
+          items: itemsWithoutCurrent.map((cartItem, index) =>
+            index === existingIndex
+              ? {
+                  ...cartItem,
+                  quantity: cartItem.quantity + quantity,
+                }
+              : cartItem,
+          ),
+        };
+      }
+
+      const nextItems = [...itemsWithoutCurrent];
+      nextItems.splice(Math.min(currentIndex, nextItems.length), 0, {
+        cartId: nextCartId,
+        itemId: item.id,
+        name: item.name,
+        price: item.price,
+        quantity,
+        spiceLevel: options.spiceLevel,
+        addOns,
+        image: item.image,
+      });
+
+      return {
+        items: nextItems,
       };
     }),
   updateQuantity: (cartId, quantity) =>
