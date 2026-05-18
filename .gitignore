@@ -31,6 +31,7 @@ yarn-error.*
 # local tooling
 .claude/
 tmp-chrome-profile/
+docs/
 
 # macOS
 .DS_Store
