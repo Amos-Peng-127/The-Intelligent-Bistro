@@ -1,9 +1,24 @@
-import type { CartItem } from "@/store/cart-store";
-import type { MenuCategoryId } from "@/data/menu";
+import type { AddOn, MenuCategoryId } from "../../data/menu-catalog";
+
+export type BistroCartItem = {
+  cartId: string;
+  itemId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  spiceLevel?: string;
+  addOns: AddOn[];
+};
 
 export type BistroAiAction =
   | {
       type: "add_item";
+      itemId: string;
+      quantity: number;
+      spiceLevel?: string;
+    }
+  | {
+      type: "set_quantity";
       itemId: string;
       quantity: number;
       spiceLevel?: string;
@@ -18,6 +33,7 @@ export type BistroAiAction =
 
 export type BistroAiIntent =
   | "add_items"
+  | "update_items"
   | "remove_items"
   | "clear_cart"
   | "recommend_items"
@@ -44,6 +60,22 @@ export type BistroAiSelectionPlan = {
   quantity?: number;
 };
 
+export type BistroAiMissingSlot = "item" | "quantity";
+
+export type BistroAiClarificationOption = {
+  label: string;
+  prompt: string;
+};
+
+export type BistroAiCommand = {
+  state: "ready" | "needs_clarification" | "inform";
+  intent: BistroAiIntent;
+  executable: boolean;
+  requiresConfirmation: boolean;
+  actions: BistroAiAction[];
+  selectionPlan?: BistroAiSelectionPlan | null;
+};
+
 export type BistroAiConversationTurn = {
   role: "assistant" | "user";
   text: string;
@@ -51,6 +83,9 @@ export type BistroAiConversationTurn = {
   referencedItemIds?: string[];
   actions?: BistroAiAction[];
   selectionPlan?: BistroAiSelectionPlan | null;
+  command?: BistroAiCommand | null;
+  missingSlots?: BistroAiMissingSlot[];
+  clarificationOptions?: BistroAiClarificationOption[];
 };
 
 export type BistroAiResponse = {
@@ -62,10 +97,13 @@ export type BistroAiResponse = {
   referencedItemIds: string[];
   unavailableRequests: string[];
   selectionPlan?: BistroAiSelectionPlan | null;
+  missingSlots?: BistroAiMissingSlot[];
+  clarificationOptions?: BistroAiClarificationOption[];
+  command?: BistroAiCommand;
 };
 
 export type BistroAiRequest = {
   prompt: string;
-  cartItems: CartItem[];
+  cartItems: BistroCartItem[];
   conversation?: BistroAiConversationTurn[];
 };

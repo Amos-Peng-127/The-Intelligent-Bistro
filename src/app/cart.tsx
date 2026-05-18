@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { CartItemRow } from "@/components/cart/CartItemRow";
 import { EmptyCart } from "@/components/cart/EmptyCart";
 import { OrderSummary } from "@/components/cart/OrderSummary";
+import { currency } from "@/lib/format";
 import { getCartTotals, useCartStore } from "@/store/cart-store";
 
 const TAX_RATE = 0.08875;
@@ -48,12 +49,46 @@ export default function CartScreen() {
         ) : (
           <>
             <View style={styles.statusCard}>
-              <Text style={styles.statusTitle}>Pickup estimate</Text>
-              <Text style={styles.statusTime}>20-30 min</Text>
+              <View style={styles.statusTopRow}>
+                <View>
+                  <Text style={styles.statusTitle}>Pickup estimate</Text>
+                  <Text style={styles.statusTime}>20-30 min</Text>
+                </View>
+                <View style={styles.statusChip}>
+                  <Text style={styles.statusChipText}>{items.length} dishes</Text>
+                </View>
+              </View>
               <Text style={styles.statusCopy}>
                 We will prepare your bistro order after checkout confirmation.
               </Text>
+              <View style={styles.statusMetrics}>
+                <View style={styles.statusMetric}>
+                  <Text style={styles.statusMetricValue}>{count}</Text>
+                  <Text style={styles.statusMetricLabel}>Items</Text>
+                </View>
+                <View style={styles.statusMetric}>
+                  <Text style={styles.statusMetricValue}>{currency.format(subtotal)}</Text>
+                  <Text style={styles.statusMetricLabel}>Subtotal</Text>
+                </View>
+                <View style={styles.statusMetric}>
+                  <Text style={styles.statusMetricValue}>{currency.format(total)}</Text>
+                  <Text style={styles.statusMetricLabel}>Est. total</Text>
+                </View>
+              </View>
             </View>
+
+            <Pressable onPress={() => router.push("/assistant")} style={styles.assistantCard}>
+              <View style={styles.assistantBadge}>
+                <Text style={styles.assistantBadgeText}>AI</Text>
+              </View>
+              <View style={styles.assistantCopy}>
+                <Text style={styles.assistantTitle}>Edit with Bistro AI</Text>
+                <Text style={styles.assistantText}>
+                  Say things like "remove one edamame" or "clear the cart after adding a fresh roll."
+                </Text>
+              </View>
+              <Text style={styles.assistantAction}>Open</Text>
+            </Pressable>
 
             <View style={styles.itemList}>
               {items.map((item) => (
@@ -142,6 +177,11 @@ const styles = StyleSheet.create({
     marginTop: 22,
     padding: 18,
   },
+  statusTopRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
   statusTitle: {
     color: "#D8E3D5",
     fontSize: 13,
@@ -159,6 +199,87 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     lineHeight: 19,
     marginTop: 6,
+  },
+  statusChip: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 248, 234, 0.14)",
+    borderRadius: 16,
+    justifyContent: "center",
+    minHeight: 34,
+    paddingHorizontal: 12,
+  },
+  statusChipText: {
+    color: "#FFF8EA",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  statusMetrics: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 18,
+  },
+  statusMetric: {
+    backgroundColor: "rgba(255, 248, 234, 0.08)",
+    borderRadius: 18,
+    flex: 1,
+    minHeight: 72,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
+  statusMetricValue: {
+    color: "#FFF8EA",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  statusMetricLabel: {
+    color: "#D8E3D5",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 4,
+  },
+  assistantCard: {
+    alignItems: "center",
+    backgroundColor: "#FFF8EA",
+    borderColor: "#E7DCCA",
+    borderRadius: 24,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 14,
+    marginTop: 16,
+    padding: 16,
+  },
+  assistantBadge: {
+    alignItems: "center",
+    backgroundColor: "#17251F",
+    borderRadius: 18,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
+  },
+  assistantBadgeText: {
+    color: "#FFF8EA",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  assistantCopy: {
+    flex: 1,
+  },
+  assistantTitle: {
+    color: "#17251F",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  assistantText: {
+    color: "#6E6255",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  assistantAction: {
+    color: "#3F5C4A",
+    fontSize: 12,
+    fontWeight: "900",
   },
   itemList: {
     gap: 12,

@@ -17,6 +17,7 @@ export function CartItemRow({ item, onDecrease, onIncrease, onRemove }: CartItem
     item.spiceLevel ? `${item.spiceLevel} spice` : undefined,
     ...item.addOns.map((addOn) => addOn.name),
   ].filter(Boolean);
+  const unitPrice = item.price + addOnsTotal;
 
   return (
     <View style={styles.card}>
@@ -27,10 +28,11 @@ export function CartItemRow({ item, onDecrease, onIncrease, onRemove }: CartItem
           <Text style={styles.total}>{currency.format(lineTotal)}</Text>
         </View>
         {optionSummary.length > 0 ? (
-          <Text style={styles.options}>{optionSummary.join(" - ")}</Text>
+          <Text style={styles.options}>{optionSummary.join(" · ")}</Text>
         ) : (
           <Text style={styles.options}>Standard preparation</Text>
         )}
+        <Text style={styles.unitPrice}>{currency.format(unitPrice)} each</Text>
         <View style={styles.controls}>
           <View style={styles.quantityPill}>
             <Pressable
@@ -106,11 +108,17 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 7,
   },
+  unitPrice: {
+    color: "#9A8B7B",
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 5,
+  },
   controls: {
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 12,
+    marginTop: 14,
   },
   quantityPill: {
     alignItems: "center",

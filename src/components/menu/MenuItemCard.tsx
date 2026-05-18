@@ -10,10 +10,16 @@ type MenuItemCardProps = {
 };
 
 export function MenuItemCard({ item, onOpen, onQuickAdd }: MenuItemCardProps) {
+  const categoryLabel =
+    item.category === "rolls"
+      ? "Fresh Roll"
+      : item.category.charAt(0).toUpperCase() + item.category.slice(1);
+
   return (
     <Pressable style={styles.menuCard} onPress={() => onOpen(item)}>
       <Image source={item.image} resizeMode="cover" style={styles.menuImage} />
       <View style={styles.menuBody}>
+        <Text style={styles.categoryLabel}>{categoryLabel}</Text>
         <View style={styles.menuTitleRow}>
           <Text style={styles.menuName}>{item.name}</Text>
           <Text style={styles.menuPrice}>{currency.format(item.price)}</Text>
@@ -35,7 +41,7 @@ export function MenuItemCard({ item, onOpen, onQuickAdd }: MenuItemCardProps) {
         }}
         style={styles.quickAdd}
       >
-        <Text style={styles.quickAddText}>+</Text>
+        <Text style={styles.quickAddText}>Add</Text>
       </Pressable>
     </Pressable>
   );
@@ -62,7 +68,14 @@ const styles = StyleSheet.create({
   menuBody: {
     flex: 1,
     marginLeft: 12,
-    paddingRight: 34,
+    paddingRight: 56,
+  },
+  categoryLabel: {
+    color: "#7A6E5F",
+    fontSize: 11,
+    fontWeight: "800",
+    marginBottom: 7,
+    textTransform: "uppercase",
   },
   menuTitleRow: {
     gap: 6,
@@ -106,18 +119,17 @@ const styles = StyleSheet.create({
   quickAdd: {
     alignItems: "center",
     backgroundColor: "#F06449",
-    borderRadius: 17,
+    borderRadius: 15,
     height: 34,
     justifyContent: "center",
     position: "absolute",
     right: 12,
     top: 12,
-    width: 34,
+    width: 46,
   },
   quickAddText: {
     color: "#FFFFFF",
-    fontSize: 22,
-    fontWeight: "700",
-    lineHeight: 26,
+    fontSize: 11,
+    fontWeight: "900",
   },
 });

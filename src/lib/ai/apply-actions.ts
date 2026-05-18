@@ -2,12 +2,14 @@ import { menuItems } from "@/data/menu";
 import type { AddOn, MenuItem } from "@/data/menu";
 import type { CartItem } from "@/store/cart-store";
 
+import { resolveSetQuantityTarget } from "./cart-targeting";
 import type { BistroAiAction } from "./types";
 
 type ApplyAiActionsArgs = {
   actions: BistroAiAction[];
   cartItems: CartItem[];
   addItem: (item: MenuItem, options?: { quantity?: number; spiceLevel?: string; addOns?: AddOn[] }) => void;
+  updateQuantity: (cartId: string, quantity: number) => void;
   removeItem: (cartId: string) => void;
   clearCart: () => void;
 };
@@ -37,6 +39,11 @@ export const describeAiAction = (action: BistroAiAction) => {
       const itemName = menuById.get(action.itemId)?.name ?? action.itemId;
       return `Remove ${itemName}`;
     }
+    case "set_quantity": {
+      const itemName = menuById.get(action.itemId)?.name ?? action.itemId;
+      const spiceLabel = action.spiceLevel ? ` - ${action.spiceLevel}` : "";
+      return `Set ${itemName}${spiceLabel} to ${action.quantity}`;
+    }
     case "clear_cart":
       return "Clear the cart";
   }
@@ -46,6 +53,7 @@ export const applyAiActions = ({
   actions,
   cartItems,
   addItem,
+  updateQuantity,
   removeItem,
   clearCart,
 }: ApplyAiActionsArgs) => {
@@ -73,6 +81,21 @@ export const applyAiActions = ({
         if (matches.length > 0) {
           applied.push(describeAiAction(action));
         }
+        return;
+      }
+      case "set_quantity": {
+        const target = resolveSetQuantityTarget(cartItems, action);
+        if (!target) {
+          return;
+        }
+
+        updateQuantity(target.cartId, action.quantity);
+        applied.push(
+          describeAiAction({
+            ...action,
+            spiceLevel: action.spiceLevel ?? target.spiceLevel,
+          }),
+        );
         return;
       }
       case "clear_cart": {

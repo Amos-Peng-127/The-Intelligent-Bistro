@@ -26,8 +26,9 @@ export function OrderSummary({ subtotal, tax, total, disabled }: OrderSummaryPro
         <Text style={styles.totalLabel}>Total</Text>
         <Text style={styles.totalValue}>{currency.format(total)}</Text>
       </View>
+      <Text style={styles.note}>Pickup window will be confirmed at checkout.</Text>
       <Pressable disabled={disabled} style={[styles.checkoutButton, disabled && styles.disabled]}>
-        <Text style={styles.checkoutText}>Checkout</Text>
+        <Text style={styles.checkoutText}>Continue to Checkout</Text>
       </Pressable>
     </View>
   );
@@ -76,6 +77,13 @@ const styles = StyleSheet.create({
     color: "#C9F05C",
     fontSize: 20,
     fontWeight: "900",
+  },
+  note: {
+    color: "#D8E3D5",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 18,
+    marginTop: 12,
   },
   checkoutButton: {
     alignItems: "center",

@@ -13,12 +13,12 @@ export function MenuHeader({ cartCount, onOpenCart }: MenuHeaderProps) {
         <Text style={styles.title}>Intelligent Bistro</Text>
       </View>
       <Pressable accessibilityLabel="Open cart" onPress={onOpenCart} style={styles.cartButton}>
-        <Text style={styles.cartIcon}>Bag</Text>
-        {cartCount > 0 ? (
-          <View style={styles.cartBadge}>
-            <Text style={styles.cartBadgeText}>{cartCount}</Text>
-          </View>
-        ) : null}
+        <Text style={styles.cartLabel}>Cart</Text>
+        <View style={[styles.cartBadge, cartCount === 0 && styles.cartBadgeEmpty]}>
+          <Text style={[styles.cartBadgeText, cartCount === 0 && styles.cartBadgeTextEmpty]}>
+            {cartCount}
+          </Text>
+        </View>
       </Pressable>
     </View>
   );
@@ -47,14 +47,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#17251F",
     borderRadius: 22,
+    flexDirection: "row",
+    gap: 10,
     height: 54,
     justifyContent: "center",
-    position: "relative",
-    width: 54,
+    paddingHorizontal: 16,
   },
-  cartIcon: {
+  cartLabel: {
     color: "#FFF8EA",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "900",
   },
   cartBadge: {
@@ -65,13 +66,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minWidth: 20,
     paddingHorizontal: 5,
-    position: "absolute",
-    right: -3,
-    top: -3,
+  },
+  cartBadgeEmpty: {
+    backgroundColor: "rgba(255, 248, 234, 0.12)",
   },
   cartBadgeText: {
     color: "#FFFFFF",
     fontSize: 11,
     fontWeight: "900",
+  },
+  cartBadgeTextEmpty: {
+    color: "#FFF8EA",
   },
 });

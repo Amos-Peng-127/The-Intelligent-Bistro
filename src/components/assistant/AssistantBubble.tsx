@@ -10,8 +10,11 @@ export function AssistantBubble({ role, text }: AssistantBubbleProps) {
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
-      <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-        <Text style={[styles.text, isUser ? styles.userText : styles.assistantText]}>{text}</Text>
+      <View style={styles.bubbleWrap}>
+        <Text style={styles.label}>{isUser ? "You" : "Bistro AI"}</Text>
+        <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+          <Text style={[styles.text, isUser ? styles.userText : styles.assistantText]}>{text}</Text>
+        </View>
       </View>
     </View>
   );
@@ -20,7 +23,7 @@ export function AssistantBubble({ role, text }: AssistantBubbleProps) {
 const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
-    marginTop: 12,
+    marginTop: 14,
   },
   userRow: {
     justifyContent: "flex-end",
@@ -28,9 +31,18 @@ const styles = StyleSheet.create({
   assistantRow: {
     justifyContent: "flex-start",
   },
+  bubbleWrap: {
+    maxWidth: "88%",
+  },
+  label: {
+    color: "#7A6E5F",
+    fontSize: 11,
+    fontWeight: "900",
+    marginBottom: 6,
+    textTransform: "uppercase",
+  },
   bubble: {
     borderRadius: 22,
-    maxWidth: "86%",
     paddingHorizontal: 16,
     paddingVertical: 13,
   },

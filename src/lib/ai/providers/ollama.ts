@@ -1,14 +1,19 @@
-import { aiRuntimeConfig } from "@/lib/ai/config";
-
 import { buildCartCatalog, buildMenuCatalog } from "../catalog";
 import type {
   BistroAiAction,
+  BistroAiClarificationOption,
   BistroAiConversationTurn,
   BistroAiIntent,
+  BistroAiMissingSlot,
   BistroAiRequest,
   BistroAiResponse,
   BistroAiSelectionPlan,
 } from "../types";
+
+export type OllamaRuntimeConfig = {
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+};
 
 const responseSchema = {
   type: "object",
@@ -17,6 +22,7 @@ const responseSchema = {
       type: "string",
       enum: [
         "add_items",
+        "update_items",
         "remove_items",
         "clear_cart",
         "recommend_items",
@@ -34,7 +40,7 @@ const responseSchema = {
         properties: {
           type: {
             type: "string",
-            enum: ["add_item", "remove_item", "clear_cart"],
+            enum: ["add_item", "set_quantity", "remove_item", "clear_cart"],
           },
           itemId: { type: "string" },
           quantity: { type: "integer", minimum: 1 },
@@ -55,6 +61,25 @@ const responseSchema = {
     unavailableRequests: {
       type: "array",
       items: { type: "string" },
+    },
+    missingSlots: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["item", "quantity"],
+      },
+    },
+    clarificationOptions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          prompt: { type: "string" },
+        },
+        required: ["label", "prompt"],
+        additionalProperties: false,
+      },
     },
     selectionPlan: {
       type: "object",
@@ -100,6 +125,8 @@ const responseSchema = {
     "suggestedItemIds",
     "referencedItemIds",
     "unavailableRequests",
+    "missingSlots",
+    "clarificationOptions",
   ],
   additionalProperties: false,
 } as const;
@@ -119,6 +146,8 @@ type LegacyModelResponse = {
   suggestedItemIds?: string[];
   referencedItemIds?: string[];
   unavailableRequests?: string[];
+  missingSlots?: string[];
+  clarificationOptions?: Array<{ label?: string; prompt?: string }>;
   selectionPlan?: unknown;
 };
 
@@ -134,6 +163,7 @@ Your job:
 
 Intent rules:
 - add_items: the user explicitly wants items added to the cart now.
+- update_items: the user explicitly wants the quantity of an item in the cart changed now.
 - remove_items: the user explicitly wants items removed from the cart now.
 - clear_cart: the user explicitly wants the cart cleared now.
 - recommend_items: the user wants suggestions on what to order.
@@ -145,16 +175,20 @@ Safety rules:
 - Questions like "should I add this", "how about this dish", or "what do you think about adding this" are not cart changes.
 - If the user asks a follow-up like "what are those dishes like", use the recent conversation.
 - Keep actions empty unless the order edit is explicit.
+- Use set_quantity when the user wants an existing cart item changed to a specific quantity, such as "change mango salmon delight to one".
 - Never say an item has already been added, removed, or cleared unless the cart change is only being proposed for confirmation.
-- If the target depends on context, ranking, comparison, price, or relative language like "this", "that", "the cheapest one", "the second one", use selectionPlan instead of guessing a final item id in actions.
+- If the target depends on context, ranking, comparison, price, or relative language like "this", "that", "the cheapest one", or "the second one", use selectionPlan instead of guessing a final item id in actions.
 - Use actions directly only when the item ids are explicit and unambiguous right now.
 - selectionPlan.source must be one of: menu, recent_referenced_items, recent_suggested_items, current_cart.
 - selectionPlan.query should summarize the selection constraint, such as "autumn", "cheapest", "spicy vegetarian", or "second one".
+- For quantity changes that depend on cart context, use selectionPlan.source=current_cart and include selectionPlan.quantity.
 - Use selectionPlan.sortBy=price with sortDirection=asc for "cheapest" and sortDirection=desc for "most expensive".
 - Only use menu item ids that exist in the catalog.
 - If you recommend or explain dishes, include real item ids in referencedItemIds. Put recommendation ids in suggestedItemIds too when relevant.
 - If the user asks to remove something not in the current cart, explain that and return no actions.
 - If you are unsure which dish the user means, ask a short clarification question and return no actions.
+- If you need clarification, fill missingSlots with item and/or quantity, and provide 2 to 4 clarificationOptions with short labels and natural next-user prompts.
+- clarificationOptions should be grounded in the menu or current cart. Do not invent dishes or ids.
 - Do not invent prices, items, or add-ons.
 - Keep the reply concise and helpful.`;
 
@@ -166,6 +200,7 @@ const normalizeStringArray = (value: unknown) =>
 const normalizeIntent = (value: unknown, fallback: BistroAiIntent): BistroAiIntent => {
   if (
     value === "add_items" ||
+    value === "update_items" ||
     value === "remove_items" ||
     value === "clear_cart" ||
     value === "recommend_items" ||
@@ -177,6 +212,37 @@ const normalizeIntent = (value: unknown, fallback: BistroAiIntent): BistroAiInte
   }
 
   return fallback;
+};
+
+const normalizeMissingSlots = (value: unknown): BistroAiMissingSlot[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.filter((entry): entry is BistroAiMissingSlot => entry === "item" || entry === "quantity"))];
+};
+
+const normalizeClarificationOptions = (value: unknown): BistroAiClarificationOption[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+
+      const option = entry as Record<string, unknown>;
+      const label = typeof option.label === "string" ? option.label.trim() : "";
+      const prompt = typeof option.prompt === "string" ? option.prompt.trim() : "";
+      if (!label || !prompt) {
+        return [];
+      }
+
+      return [{ label, prompt }];
+    })
+    .slice(0, 4);
 };
 
 const normalizeSelectionPlan = (value: unknown): BistroAiSelectionPlan | null => {
@@ -261,6 +327,10 @@ const normalizeSelectionPlan = (value: unknown): BistroAiSelectionPlan | null =>
 const inferIntentFromFields = (actions: BistroAiAction[], suggestedItemIds: string[], referencedItemIds: string[]) => {
   if (actions.some((action) => action.type === "clear_cart")) {
     return "clear_cart" as const;
+  }
+
+  if (actions.some((action) => action.type === "set_quantity")) {
+    return "update_items" as const;
   }
 
   if (actions.some((action) => action.type === "remove_item")) {
@@ -382,11 +452,11 @@ const extractLooseActions = (content: string): BistroAiAction[] => {
       continue;
     }
 
-    if (type === "add_item") {
+    if (type === "add_item" || type === "set_quantity") {
       const quantityMatch = /"quantity"\s*:\s*(\d+)/.exec(rawAction);
       const spiceLevel = extractJsonStringField(rawAction, "spiceLevel") ?? undefined;
       actions.push({
-        type: "add_item",
+        type,
         itemId,
         quantity: quantityMatch ? Math.max(1, Number(quantityMatch[1])) : 1,
         spiceLevel,
@@ -445,6 +515,8 @@ const extractLooseStructuredResponse = (content: string): BistroAiResponse | nul
     suggestedItemIds,
     referencedItemIds,
     unavailableRequests: extractJsonStringArrayField(content, "unavailableRequests"),
+    missingSlots: normalizeMissingSlots(extractJsonStringArrayField(content, "missingSlots")),
+    clarificationOptions: [],
     selectionPlan: extractLooseSelectionPlan(content),
   };
 };
@@ -464,6 +536,19 @@ const normalizeActions = (actions: unknown): BistroAiAction[] => {
     if (rawAction.type === "add_item" && typeof rawAction.itemId === "string") {
       normalized.push({
         type: "add_item",
+        itemId: rawAction.itemId,
+        quantity:
+          typeof rawAction.quantity === "number" && rawAction.quantity > 0
+            ? Math.round(rawAction.quantity)
+            : 1,
+        spiceLevel: typeof rawAction.spiceLevel === "string" ? rawAction.spiceLevel : undefined,
+      });
+      return normalized;
+    }
+
+    if (rawAction.type === "set_quantity" && typeof rawAction.itemId === "string") {
+      normalized.push({
+        type: "set_quantity",
         itemId: rawAction.itemId,
         quantity:
           typeof rawAction.quantity === "number" && rawAction.quantity > 0
@@ -539,6 +624,8 @@ const normalizeLegacyModelResponse = (parsed: LegacyModelResponse): BistroAiResp
     suggestedItemIds,
     referencedItemIds,
     unavailableRequests: normalizeStringArray(parsed.unavailableRequests ?? parsed.actions?.unavailableRequests),
+    missingSlots: normalizeMissingSlots(parsed.missingSlots),
+    clarificationOptions: normalizeClarificationOptions(parsed.clarificationOptions),
     selectionPlan: normalizeSelectionPlan(parsed.selectionPlan),
   };
 };
@@ -554,27 +641,45 @@ const buildConversationCatalog = (conversation: BistroAiConversationTurn[] = [])
       const parts = [`${index + 1}. ${turn.role}: ${turn.text}`];
 
       if (turn.suggestedItemIds?.length) {
-        parts.push(`suggestedItemIds: ${turn.suggestedItemIds.join(", ")}`);
+        parts.push(`assistant suggested dishes -> ${turn.suggestedItemIds.join(", ")}`);
       }
 
       if (turn.referencedItemIds?.length) {
-        parts.push(`referencedItemIds: ${turn.referencedItemIds.join(", ")}`);
+        parts.push(`assistant referenced dishes -> ${turn.referencedItemIds.join(", ")}`);
       }
 
       if (turn.actions?.length) {
         parts.push(
-          `actions: ${turn.actions
+          `assistant proposed actions -> ${turn.actions
             .map((action) =>
               action.type === "clear_cart"
                 ? "clear_cart"
-                : `${action.type}:${action.itemId}${action.type === "add_item" ? `:${action.quantity}` : ""}`,
+                : `${action.type}:${action.itemId}${action.type === "add_item" || action.type === "set_quantity" ? `:${action.quantity}` : ""}`,
             )
             .join(", ")}`,
         );
       }
 
+      if (turn.command) {
+        parts.push(
+          `assistant command -> ${turn.command.state}:${turn.command.intent}:executable=${turn.command.executable}`,
+        );
+      }
+
+      if (turn.missingSlots?.length) {
+        parts.push(`assistant still needs -> ${turn.missingSlots.join(", ")}`);
+      }
+
+      if (turn.clarificationOptions?.length) {
+        parts.push(
+          `assistant clarification options -> ${turn.clarificationOptions
+            .map((option) => option.label)
+            .join(", ")}`,
+        );
+      }
+
       if (turn.selectionPlan) {
-        parts.push(`selectionPlan: ${JSON.stringify(turn.selectionPlan)}`);
+        parts.push(`assistant selection hint -> ${JSON.stringify(turn.selectionPlan)}`);
       }
 
       return parts.join(" | ");
@@ -594,25 +699,30 @@ const buildStructuredFallback = (prompt: string, content?: string): BistroAiResp
   suggestedItemIds: [],
   referencedItemIds: [],
   unavailableRequests: [],
+  missingSlots: [],
+  clarificationOptions: [],
   selectionPlan: null,
 });
 
-export async function submitOllamaOrderPrompt({
-  prompt,
-  cartItems,
-  conversation,
-}: BistroAiRequest): Promise<BistroAiResponse> {
+export async function submitOllamaOrderPrompt(
+  {
+    prompt,
+    cartItems,
+    conversation,
+  }: BistroAiRequest,
+  config: OllamaRuntimeConfig,
+): Promise<BistroAiResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-  const response = await fetch(`${aiRuntimeConfig.ollamaBaseUrl}/api/chat`, {
+  const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     signal: controller.signal,
     body: JSON.stringify({
-      model: aiRuntimeConfig.ollamaModel,
+      model: config.ollamaModel,
       stream: false,
       format: responseSchema,
       options: {
@@ -650,7 +760,7 @@ export async function submitOllamaOrderPrompt({
       }
 
       throw new Error(
-        `Could not reach Ollama at ${aiRuntimeConfig.ollamaBaseUrl}. Start Ollama and make sure ${aiRuntimeConfig.ollamaModel} is pulled.`,
+        `Could not reach Ollama at ${config.ollamaBaseUrl}. Start Ollama and make sure ${config.ollamaModel} is pulled.`,
       );
     })
     .finally(() => clearTimeout(timeoutId));
@@ -690,6 +800,8 @@ export async function submitOllamaOrderPrompt({
     suggestedItemIds,
     referencedItemIds,
     unavailableRequests: normalizeStringArray((parsed as Record<string, unknown>).unavailableRequests),
+    missingSlots: normalizeMissingSlots((parsed as Record<string, unknown>).missingSlots),
+    clarificationOptions: normalizeClarificationOptions((parsed as Record<string, unknown>).clarificationOptions),
     selectionPlan: normalizeSelectionPlan((parsed as Record<string, unknown>).selectionPlan),
   };
 }

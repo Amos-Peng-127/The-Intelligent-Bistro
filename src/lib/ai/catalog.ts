@@ -1,5 +1,6 @@
-import { menuItems } from "@/data/menu";
-import type { CartItem } from "@/store/cart-store";
+import { menuCatalogItems as menuItems } from "../../data/menu-catalog";
+
+import type { BistroCartItem } from "./types";
 
 const getCourseLabel = (category: (typeof menuItems)[number]["category"]) => {
   switch (category) {
@@ -35,7 +36,7 @@ export const buildMenuCatalog = () =>
     })
     .join("\n");
 
-export const buildCartCatalog = (cartItems: CartItem[]) => {
+export const buildCartCatalog = (cartItems: BistroCartItem[]) => {
   if (cartItems.length === 0) {
     return "Cart is empty.";
   }

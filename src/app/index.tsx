@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { router } from "expo-router";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { CartSummaryBar } from "@/components/cart/CartSummaryBar";
@@ -12,7 +12,8 @@ import { MenuHeader } from "@/components/menu/MenuHeader";
 import { MenuItemCard } from "@/components/menu/MenuItemCard";
 import { MenuSearch } from "@/components/menu/MenuSearch";
 import { SectionHeader } from "@/components/menu/SectionHeader";
-import { categories, menuItems, type AddOn, type MenuCategoryId, type MenuItem } from "@/data/menu";
+import { type AddOn, type MenuCategoryId, type MenuItem } from "@/data/menu";
+import { fallbackMenuData, useBistroMenu } from "@/lib/bistro-api";
 import { getCartTotals, useCartStore } from "@/store/cart-store";
 
 export default function Index() {
@@ -22,13 +23,17 @@ export default function Index() {
   const [detailQuantity, setDetailQuantity] = useState(1);
   const [detailSpice, setDetailSpice] = useState<string | undefined>();
   const [detailAddOns, setDetailAddOns] = useState<AddOn[]>([]);
+  const menuQuery = useBistroMenu();
   const addItem = useCartStore((state) => state.addItem);
   const cartItems = useCartStore((state) => state.items);
   const { count, subtotal } = getCartTotals(cartItems);
+  const menuData = menuQuery.data ?? fallbackMenuData;
+  const menuCategories = menuData.categories;
+  const allMenuItems = menuData.items;
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return menuItems.filter((item) => {
+    return allMenuItems.filter((item) => {
       const matchesCategory =
         selectedCategory === "featured" ? item.featured : item.category === selectedCategory;
       const matchesQuery =
@@ -39,13 +44,13 @@ export default function Index() {
 
       return matchesCategory && matchesQuery;
     });
-  }, [query, selectedCategory]);
+  }, [allMenuItems, query, selectedCategory]);
 
-  const featuredItems = useMemo(() => menuItems.filter((item) => item.featured), []);
+  const featuredItems = useMemo(() => allMenuItems.filter((item) => item.featured), [allMenuItems]);
   const sectionTitle =
     selectedCategory === "featured"
       ? "Chef-curated picks"
-      : categories.find((category) => category.id === selectedCategory)?.label ?? "Menu";
+      : menuCategories.find((category) => category.id === selectedCategory)?.label ?? "Menu";
   const detailTotal = selectedItem
     ? (selectedItem.price + detailAddOns.reduce((sum, addOn) => sum + addOn.price, 0)) *
       detailQuantity
@@ -93,7 +98,7 @@ export default function Index() {
         <MenuSearch query={query} onChangeQuery={setQuery} />
         <AiOrderCard onPress={() => router.push("/assistant")} />
         <CategoryRail
-          categories={categories}
+          categories={menuCategories}
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
         />
@@ -104,14 +109,23 @@ export default function Index() {
         ) : null}
 
         <View style={styles.menuList}>
-          {filteredItems.map((item) => (
-            <MenuItemCard
-              key={item.id}
-              item={item}
-              onOpen={openDetails}
-              onQuickAdd={quickAddItem}
-            />
-          ))}
+          {filteredItems.length > 0 ? (
+            filteredItems.map((item) => (
+              <MenuItemCard
+                key={item.id}
+                item={item}
+                onOpen={openDetails}
+                onQuickAdd={quickAddItem}
+              />
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateTitle}>No dishes match that search.</Text>
+              <Text style={styles.emptyStateText}>
+                Try another keyword, switch categories, or ask Bistro AI for a curated pick.
+              </Text>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -147,5 +161,27 @@ const styles = StyleSheet.create({
   },
   menuList: {
     gap: 12,
+  },
+  emptyState: {
+    alignItems: "center",
+    backgroundColor: "#FFF8EA",
+    borderColor: "#E7DCCA",
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingHorizontal: 22,
+    paddingVertical: 28,
+  },
+  emptyStateTitle: {
+    color: "#17251F",
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  emptyStateText: {
+    color: "#6E6255",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+    marginTop: 8,
+    textAlign: "center",
   },
 });

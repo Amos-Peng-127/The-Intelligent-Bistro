@@ -11,10 +11,14 @@ export function AiOrderCard({ onPress }: AiOrderCardProps) {
         <Text style={styles.aiMarkText}>AI</Text>
       </View>
       <View style={styles.aiCopy}>
-        <Text style={styles.aiTitle}>Ask Bistro AI</Text>
-        <Text style={styles.aiSubtitle}>Try "Add two tonkotsu ramen and spicy edamame."</Text>
+        <Text style={styles.aiTitle}>Order with Bistro AI</Text>
+        <Text style={styles.aiSubtitle}>
+          Describe what you want in plain language and review changes before anything is applied.
+        </Text>
       </View>
-      <Text style={styles.aiArrow}>+</Text>
+      <View style={styles.aiAction}>
+        <Text style={styles.aiActionText}>Try it</Text>
+      </View>
     </Pressable>
   );
 }
@@ -57,9 +61,17 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 2,
   },
-  aiArrow: {
+  aiAction: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 248, 234, 0.12)",
+    borderRadius: 16,
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
+  aiActionText: {
     color: "#FFF8EA",
-    fontSize: 26,
-    fontWeight: "500",
+    fontSize: 12,
+    fontWeight: "900",
   },
 });
