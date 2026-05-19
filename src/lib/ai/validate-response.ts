@@ -327,37 +327,95 @@ const clarificationStopTokens = new Set([
   "cart",
   "change",
   "clear",
+  "confirm",
+  "confirmed",
+  "correct",
   "delete",
   "dish",
   "dishes",
+  "exactly",
   "from",
   "get",
+  "good",
+  "got",
   "give",
   "help",
   "i",
   "in",
+  "is",
+  "it",
   "item",
   "items",
   "make",
   "me",
   "my",
+  "ok",
+  "okay",
   "of",
   "on",
   "one",
   "order",
   "please",
+  "right",
   "remove",
   "set",
+  "sure",
   "that",
   "the",
   "them",
   "this",
   "to",
+  "understood",
   "update",
   "want",
   "with",
+  "yeah",
+  "yep",
+  "yes",
+  "\u53ef\u4ee5",
+  "\u5bf9",
+  "\u5bf9\u7684",
+  "\u6ca1\u9519",
+  "\u660e\u767d\u4e86",
+  "\u662f\u7684",
+  "\u6536\u5230",
+  "\u6b63\u786e",
+  "\u597d",
+  "\u597d\u7684",
+  "\u884c",
 ]);
 const menuNameSet = new Set(menuItems.map((item) => normalizeText(item.name)));
+const clarificationAckPhrases = new Set([
+  "confirm",
+  "confirmed",
+  "correct",
+  "exactly",
+  "got it",
+  "looks good",
+  "ok",
+  "okay",
+  "right",
+  "sounds good",
+  "sure",
+  "that is correct",
+  "that s correct",
+  "understood",
+  "yeah",
+  "yep",
+  "yes",
+  "yes correct",
+  "\u53ef\u4ee5",
+  "\u5bf9",
+  "\u5bf9\u7684",
+  "\u6ca1\u9519",
+  "\u660e\u767d\u4e86",
+  "\u662f\u7684",
+  "\u6536\u5230",
+  "\u6b63\u786e",
+  "\u597d",
+  "\u597d\u7684",
+  "\u884c",
+]);
 
 const countWordMap: Record<string, number> = {
   one: 1,
@@ -392,6 +450,11 @@ const asksForPriciest = (prompt: string) => includesAny(prompt, priciestHints);
 const asksForAlternativeRecommendation = (prompt: string) => includesAny(prompt, alternativeRecommendationHints);
 
 const looksLikeExplanationPrompt = (prompt: string) => includesAny(prompt, explanationHints);
+const looksLikeClarificationAck = (prompt: string) =>
+  clarificationAckPhrases.has(prompt) ||
+  /^(?:(?:yes|yeah|yep)\s+(?:correct|right|that\s+is\s+correct|that\s+s\s+correct)|that\s+is\s+correct|that\s+s\s+correct|got\s+it|looks\s+good|ok|okay|right|sounds\s+good|sure|understood|yes|correct|exactly|\u53ef\u4ee5|\u5bf9|\u5bf9\u7684|\u6ca1\u9519|\u660e\u767d\u4e86|\u662f\u7684|\u6536\u5230|\u6b63\u786e|\u597d|\u597d\u7684|\u884c)$/.test(
+    prompt,
+  );
 
 const stripStructuredFieldLeak = (reply: string) => {
   const leakPatterns = [
@@ -691,19 +754,19 @@ const extractOrdinalIndex = (prompt: string, total: number) => {
   }
 
   if (
-    /(?:\bfirst\b|\b1st\b|\b#?1\b|\u7b2c\s*1\s*\u4e2a|\u7b2c\u4e00\u4e2a|\u7b2c\s*\u4e00\s*\u4e2a)/.test(prompt)
+    /(?:\bfirst\b|\b1st\b|#\s*1\b|\u7b2c\s*1\s*\u4e2a|\u7b2c\u4e00\u4e2a|\u7b2c\s*\u4e00\s*\u4e2a)/.test(prompt)
   ) {
     return 0;
   }
 
   if (
-    /(?:\bsecond\b|\b2nd\b|\b#?2\b|\u7b2c\s*2\s*\u4e2a|\u7b2c\u4e8c\u4e2a|\u7b2c\s*\u4e8c\s*\u4e2a)/.test(prompt)
+    /(?:\bsecond\b|\b2nd\b|#\s*2\b|\u7b2c\s*2\s*\u4e2a|\u7b2c\u4e8c\u4e2a|\u7b2c\s*\u4e8c\s*\u4e2a)/.test(prompt)
   ) {
     return total > 1 ? 1 : 0;
   }
 
   if (
-    /(?:\bthird\b|\b3rd\b|\b#?3\b|\u7b2c\s*3\s*\u4e2a|\u7b2c\u4e09\u4e2a|\u7b2c\s*\u4e09\s*\u4e2a)/.test(prompt)
+    /(?:\bthird\b|\b3rd\b|#\s*3\b|\u7b2c\s*3\s*\u4e2a|\u7b2c\u4e09\u4e2a|\u7b2c\s*\u4e09\s*\u4e2a)/.test(prompt)
   ) {
     return total > 2 ? 2 : total - 1;
   }
@@ -722,13 +785,12 @@ const getLatestReferencedIds = (conversation: BistroAiRequest["conversation"] = 
       continue;
     }
 
-    const referencedIds =
-      turn.referencedItemIds?.filter((itemId) => menuById.has(itemId)) ??
-      turn.suggestedItemIds?.filter((itemId) => menuById.has(itemId)) ??
-      [];
+    const referencedIds = turn.referencedItemIds?.filter((itemId) => menuById.has(itemId)) ?? [];
+    const suggestedIds = turn.suggestedItemIds?.filter((itemId) => menuById.has(itemId)) ?? [];
+    const candidateIds = referencedIds.length > 0 ? referencedIds : suggestedIds;
 
-    if (referencedIds.length > 0) {
-      return unique(referencedIds);
+    if (candidateIds.length > 0) {
+      return unique(candidateIds);
     }
   }
 
@@ -808,7 +870,9 @@ const resolveClarificationFollowUpIntent = (request: BistroAiRequest, prompt: st
 
   return answeredWithItem || answeredWithQuantity || answeredWithSpiceLevel
     ? latestAssistantTurn.command.intent
-    : null;
+    : looksLikeClarificationAck(prompt)
+      ? latestAssistantTurn.command.intent
+      : null;
 };
 
 const getSelectionSourceIds = (request: BistroAiRequest, source: BistroAiSelectionPlan["source"]) => {
@@ -1439,16 +1503,16 @@ const resolveContextualItemIds = (request: BistroAiRequest, prompt: string) => {
     (detectPromptSpiceLevel(prompt) !== undefined ||
       (detectPromptAddOnIds(prompt, clarificationTargetItemId)?.length ?? 0) > 0);
 
-  if (ordinalIndex !== null && latestReferencedIds[ordinalIndex]) {
-    return [latestReferencedIds[ordinalIndex]];
-  }
-
   if (clarificationReplyLooksLikeModifiers && clarificationTargetItemId) {
     return [clarificationTargetItemId];
   }
 
   if (directMatches.length > 0) {
     return directMatches;
+  }
+
+  if (ordinalIndex !== null && latestReferencedIds[ordinalIndex]) {
+    return [latestReferencedIds[ordinalIndex]];
   }
 
   if (latestReferencedIds.length === 0) {
@@ -1682,19 +1746,22 @@ const findClarificationCandidates = (
         }
       });
 
-      if (preferredSet.has(item.id)) {
+      const matchedScore = score;
+
+      if (preferredSet.has(item.id) && matchedScore > 0) {
         score += 2;
       }
 
       return {
         itemId: item.id,
         featured: item.featured ? 1 : 0,
+        matchedScore,
         name: item.name,
         price: item.price,
         score,
       };
     })
-    .filter((entry) => entry.score > 0)
+    .filter((entry) => entry.matchedScore > 0)
     .sort(
       (left, right) =>
         right.score - left.score ||
@@ -2761,6 +2828,8 @@ const buildCommand = ({
 export const validateAiResponse = (request: BistroAiRequest, response: BistroAiResponse): BistroAiResponse => {
   const preferChinese = hasChineseCharacters(request.prompt);
   const normalizedPrompt = normalizeText(request.prompt);
+  const clarificationAckPrompt = looksLikeClarificationAck(normalizedPrompt);
+  const latestAssistantTurn = getLatestAssistantTurn(request.conversation);
   const latestConversationItemIds = getLatestReferencedIds(request.conversation);
   const latestSuggestedIds = getLatestSuggestedIds(request.conversation);
   const latestAssistantSelectionIds = getLatestAssistantSelectionIds(request);
@@ -2800,7 +2869,16 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
   const clarificationFollowUpIntent =
     promptSuggestsAdd || promptSuggestsUpdateVerb || promptSuggestsRemove || promptSuggestsClear
       ? null
-      : resolveClarificationFollowUpIntent(request, normalizedPrompt);
+      : resolveClarificationFollowUpIntent(request, normalizedPrompt) ??
+        (clarificationAckPrompt &&
+        latestAssistantTurn?.command?.state === "needs_clarification" &&
+        isCartEditIntent(latestAssistantTurn.command.intent)
+          ? latestAssistantTurn.command.intent
+          : null);
+  const clarificationAckFollowUp =
+    Boolean(clarificationFollowUpIntent) &&
+    clarificationAckPrompt &&
+    latestAssistantTurn?.command?.state === "needs_clarification";
   const promptSuggestsAlternativeRecommendation = asksForAlternativeRecommendation(normalizedPrompt);
   const requestedRecommendationGroups = extractRequestedRecommendationGroups(normalizedPrompt);
 
@@ -2831,6 +2909,14 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
       ? resolveMenuMentions(normalizedPrompt, { preferredItemIds: preferredMenuResolutionIds })
       : null;
   const unresolvedMenuPhrases = explicitMenuResolution?.unresolvedPhrases ?? [];
+  const structuralSelectionResolvedByContext =
+    actionIntent &&
+    explicitActionIntent &&
+    unresolvedMenuPhrases.length > 0 &&
+    contextualItemIds.length > 0 &&
+    isStructuralSelectionQuery(normalizedPrompt);
+  const hasBlockingUnresolvedMenuPhrases =
+    unresolvedMenuPhrases.length > 0 && !structuralSelectionResolvedByContext;
   const modelWasOvereager = actionIntent && actions.length > 0 && !explicitActionIntent;
   const inferredExplicitActions =
     actionIntent && explicitActionIntent
@@ -2840,6 +2926,18 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
   if (clarificationFollowUpIntent) {
     actions = [];
     unavailableRequests = [];
+  }
+
+  if (clarificationAckFollowUp) {
+    missingSlots = unique([...(latestAssistantTurn?.missingSlots ?? []), ...missingSlots]);
+
+    if (clarificationOptions.length === 0) {
+      clarificationOptions = sanitizeClarificationOptions(latestAssistantTurn?.clarificationOptions);
+    }
+
+    if (referencedItemIds.length === 0) {
+      referencedItemIds = getLatestReferencedIds(request.conversation);
+    }
   }
 
   if (looksLikeExplanationPrompt(normalizedPrompt) && (selectionPlanItemIds.length > 0 || contextualItemIds.length > 0)) {
@@ -2856,9 +2954,9 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     intent = "answer_question";
   }
 
-  if (actionIntent && explicitActionIntent && (explicitMenuResolution?.unresolvedPhrases.length ?? 0) > 0) {
+  if (actionIntent && explicitActionIntent && hasBlockingUnresolvedMenuPhrases) {
     actions = [];
-    unavailableRequests = explicitMenuResolution?.unresolvedPhrases ?? [];
+    unavailableRequests = unresolvedMenuPhrases;
   }
 
   if (actionIntent && explicitActionIntent && inferredExplicitActions.length > 0) {
@@ -2991,7 +3089,7 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     intent === "add_items" &&
     actions.length === 1 &&
     actions[0]?.type === "add_item" &&
-    unresolvedMenuPhrases.length === 0 &&
+    !hasBlockingUnresolvedMenuPhrases &&
     !ambiguousContextReference
       ? (() => {
           const action = actions[0];
@@ -3032,16 +3130,31 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     (
       ambiguousContextReference ||
       noResolvedActionTarget ||
-      (unresolvedMenuPhrases.length > 0 && selectionPlanItemIds.length === 0)
+      (hasBlockingUnresolvedMenuPhrases && selectionPlanItemIds.length === 0)
     )
   ) {
     inferredMissingSlots.push("item");
   }
 
   if (inferredMissingSlots.length > 0) {
-    missingSlots = unique([...missingSlots, ...inferredMissingSlots]);
-  } else if (actions.length > 0 && unresolvedMenuPhrases.length === 0 && !ambiguousContextReference) {
+    missingSlots = inferredMissingSlots;
+  } else if (actions.length > 0 && !hasBlockingUnresolvedMenuPhrases && !ambiguousContextReference) {
     missingSlots = [];
+  }
+
+  const shouldDropUngroundedItemActions =
+    actionIntent &&
+    explicitActionIntent &&
+    intent !== "clear_cart" &&
+    missingSlots.includes("item") &&
+    explicitResolutionMatchIds.length === 0 &&
+    contextualItemIds.length === 0 &&
+    selectionPlanItemIds.length === 0;
+
+  if (shouldDropUngroundedItemActions) {
+    actions = [];
+    referencedItemIds = [];
+    clarificationOptions = [];
   }
 
   let clarificationCandidateItemIds: string[] = [];
@@ -3078,16 +3191,29 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     }
   }
 
-  if (missingSlots.includes("quantity") && quantityTargetItemId && clarificationOptions.length === 0) {
-    clarificationOptions = buildQuantityClarificationOptions(
-      quantityTargetItemId,
-      preferChinese,
-      request.cartItems.find((item) => item.itemId === quantityTargetItemId)?.quantity,
-    );
+  const canonicalQuantityClarificationOptions =
+    missingSlots.includes("quantity") && quantityTargetItemId
+      ? buildQuantityClarificationOptions(
+          quantityTargetItemId,
+          preferChinese,
+          request.cartItems.find((item) => item.itemId === quantityTargetItemId)?.quantity,
+        )
+      : [];
+  const canonicalSpiceClarificationOptions =
+    missingSlots.includes("spice_level") && spiceClarificationAction
+      ? buildSpiceClarificationOptions(spiceClarificationAction, preferChinese)
+      : [];
+
+  if (!missingSlots.includes("item") && canonicalQuantityClarificationOptions.length > 0) {
+    clarificationOptions = canonicalQuantityClarificationOptions;
   }
 
-  if (missingSlots.includes("spice_level") && spiceClarificationAction && clarificationOptions.length === 0) {
-    clarificationOptions = buildSpiceClarificationOptions(spiceClarificationAction, preferChinese);
+  if (
+    !missingSlots.includes("item") &&
+    !missingSlots.includes("quantity") &&
+    canonicalSpiceClarificationOptions.length > 0
+  ) {
+    clarificationOptions = canonicalSpiceClarificationOptions;
   }
 
   const hasExecutableActionSet =
@@ -3096,7 +3222,7 @@ export const validateAiResponse = (request: BistroAiRequest, response: BistroAiR
     !budgetReplyState &&
     actions.length > 0 &&
     missingSlots.length === 0 &&
-    unresolvedMenuPhrases.length === 0 &&
+    !hasBlockingUnresolvedMenuPhrases &&
     !ambiguousContextReference;
 
   if (hasExecutableActionSet) {
